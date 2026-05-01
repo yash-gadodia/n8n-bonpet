@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+"""Build the Customer Metrics workflow and deploy it to n8n (team project)."""
+import json
+import uuid
+import os
+import urllib.request
+import urllib.error
+
+from _notify import telegram_send_node
+import subprocess
+
+API = "https://n8n.thebonpet.com/api/v1"
+WF_NAME = "Customer Metrics - WhatsApp"
+
+TEAM_PROJECT_ID = "i1GSXBntwNvNqic8"  # "The Bon Pet"
+MANUAL_WEBHOOK_ID = "customer-metrics-manual-4e7b2a9c0d"
+
+SHOPIFY_STORE = "d2ac44-d5"
+SHOPIFY_API = "2024-10"
+SHOPIFY_CRED_ID = "heQ68zjV90EpARzU"
+SHOPIFY_CRED_NAME = "Shopify Access Token n8n"
+
+WA_URL = "https://api.thebonpet.com/whatsapp/send"
+WA_KEY = subprocess.check_output(["security","find-generic-password","-a","thebonpet","-s","wa-api-key","-w"]).decode().strip()
+RECIPIENTS = [
+    "+6581394225",  # Yash
+    "+6598531677",  # Nicolas
+    "+6590108515",  # Bon Pet official
+    "+6587993341",  # Rachel
+    "+6581114800",  # Shaun
+    "+6282240119788",  # Bari (CS agent, ID)
+]
+
+DATE_RANGES_JS = r"""// Compute last completed Mon-Sun week + prev week in SGT
+const now = new Date();
+const SGT_OFFSET_MS = 8 * 60 * 60 * 1000;
+const DAY = 24 * 60 * 60 * 1000;
+
+const sgtNow = new Date(now.getTime() + SGT_OFFSET_MS);
+const sgtDayOfWeek = sgtNow.getUTCDay();            // 0=Sun ... 6=Sat
+const daysSinceMonday = (sgtDayOfWeek + 6) % 7;     // 0=Mon ... 6=Sun
+const sgtMidnightToday = Date.UTC(
+  sgtNow.getUTCFullYear(), sgtNow.getUTCMonth(), sgtNow.getUTCDate()
+) - SGT_OFFSET_MS;
+
+const weekEnd       = sgtMidnightToday - daysSinceMonday * DAY;
+const weekStart     = weekEnd - 7 * DAY;
+const prevWeekEnd   = weekStart;
+const prevWeekStart = weekStart - 7 * DAY;
+
+const labelStart = new Date(weekStart);
+const labelEnd   = new Date(weekEnd - 1);
+
+const fmtDay  = new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Singapore', day: '2-digit'});
+const fmtMon  = new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Singapore', month: 'short'});
+const fmtYear = new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Singapore', year: 'numeric'});
+
+const d1 = fmtDay.format(labelStart);
+const d2 = fmtDay.format(labelEnd);
+const m1 = fmtMon.format(labelStart);
+const m2 = fmtMon.format(labelEnd);
+const y  = fmtYear.format(labelEnd);
+
+const weekLabel = (m1 === m2)
+  ? `Week ${d1}–${d2} ${m2} ${y}`
+  : `Week ${d1} ${m1} – ${d2} ${m2} ${y}`;
+
+return [{
+  json: {
+    week_start:       new Date(weekStart).toISOString(),
+    week_end:         new Date(weekEnd).toISOString(),
+    prev_week_start:  new Date(prevWeekStart).toISOString(),
+    prev_week_end:    new Date(prevWeekEnd).toISOString(),
+    fetch_start:      new Date(prevWeekStart).toISOString(),
+    fetch_end:        new Date(weekEnd).toISOString(),
+    week_label:       weekLabel,
+  }
+}];
+"""
+
+AGGREGATE_JS = r"""// Aggregate customer metrics for last completed week + W-over-W deltas
+// Note: Shopify 2024-10 strips PII (orders_count, total_spent, email) from the
+// embedded customer object. We use a 14-day window approximation for new vs
+// returning: a customer appearing for the first time in our window is treated
+// as "new". Lifetime-new would require the Customers API.
+const ranges = $('Set Date Ranges').first().json;
+const orders = $('Fetch Orders').all()
+  .flatMap(it => it.json.orders || [it.json])
+  .filter(o => o && o.id);
+
+const wStart  = new Date(ranges.week_start).getTime();
+const wEnd    = new Date(ranges.week_end).getTime();
+const pwStart = new Date(ranges.prev_week_start).getTime();
+const pwEnd   = new Date(ranges.prev_week_end).getTime();
+
+function orderInRange(o, rStart, rEnd) {
+  const t = new Date(o.created_at).getTime();
+  if (t < rStart || t >= rEnd) return false;
+  if (o.cancelled_at) return false;
+  if (o.financial_status !== 'paid' && o.financial_status !== 'partially_refunded') return false;
+  return true;
+}
+
+function customerIdsIn(rStart, rEnd) {
+  const set = new Set();
+  for (const o of orders) {
+    if (!orderInRange(o, rStart, rEnd)) continue;
+    const cid = (o.customer || {}).id;
+    if (cid != null) set.add(String(cid));
+  }
+  return set;
+}
+
+function customerLabel(o) {
+  if (o.email) return o.email;
+  if (o.contact_email) return o.contact_email;
+  const ba = o.billing_address || {};
+  const name = `${ba.first_name || ''} ${ba.last_name || ''}`.trim();
+  if (name) return name;
+  const cid = (o.customer || {}).id;
+  return cid ? `customer #${cid}` : '(guest)';
+}
+
+function metricsForRange(rStart, rEnd, priorRangeIds) {
+  let totalOrders = 0, revenue = 0, newCust = 0, returningCust = 0;
+  const byCustomer = new Map();
+  const seenThisRange = new Set();
+
+  for (const o of orders) {
+    if (!orderInRange(o, rStart, rEnd)) continue;
+
+    totalOrders++;
+    const total = parseFloat(o.total_price || '0');
+    revenue += total;
+
+    const cid = (o.customer || {}).id != null ? String(o.customer.id) : null;
+    if (cid) {
+      // "new" iff customer didn't appear in the prior range window
+      const isFirstInThisRange = !seenThisRange.has(cid);
+      seenThisRange.add(cid);
+      if (isFirstInThisRange) {
+        if (priorRangeIds.has(cid)) returningCust++;
+        else newCust++;
+      } else {
+        returningCust++;  // repeat order within same week
+      }
+
+      const entry = byCustomer.get(cid) || {
+        label: customerLabel(o),
+        revenue: 0,
+        orders: 0,
+      };
+      entry.revenue += total;
+      entry.orders += 1;
+      // Prefer email over name-only label if a later order has it
+      if (o.email || o.contact_email) entry.label = customerLabel(o);
+      byCustomer.set(cid, entry);
+    }
+  }
+
+  const aov = totalOrders > 0 ? revenue / totalOrders : 0;
+  const repeatRate = totalOrders > 0 ? returningCust / totalOrders : 0;
+
+  let topCustomer = null;
+  for (const [cid, entry] of byCustomer) {
+    if (!topCustomer || entry.revenue > topCustomer.revenue) {
+      topCustomer = { cid, ...entry };
+    }
+  }
+
+  return { totalOrders, revenue, newCust, returningCust, aov, repeatRate, topCustomer };
+}
+
+// Customer IDs active in prior week (used as "has purchased before" signal for this week)
+const prevWeekIds = customerIdsIn(pwStart, pwEnd);
+// For prev week metrics, we treat any customer appearing in last week as a returning candidate
+// but we only have 14d of data — use empty prior set (best we can approximate)
+const emptySet = new Set();
+
+const w = metricsForRange(wStart,  wEnd,  prevWeekIds);
+const p = metricsForRange(pwStart, pwEnd, emptySet);
+
+function pctChange(curr, prior) {
+  if (!prior || prior === 0) return null;
+  return Math.round(((curr - prior) / prior) * 100);
+}
+function pctTag(curr, prior) {
+  const d = pctChange(curr, prior);
+  if (d === null) return '';
+  const emoji = d > 0 ? '📈' : (d < 0 ? '📉' : '➡️');
+  const sign = d > 0 ? '+' : '';
+  return ` (${sign}${d}% ${emoji})`;
+}
+function deltaRaw(curr, prior) {
+  const d = curr - prior;
+  if (d === 0) return '';
+  const sign = d > 0 ? '+' : '';
+  return ` (${sign}${d} vs last week)`;
+}
+function fmtSGD(n) { return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+
+const newCustLine     = `${w.newCust} first-timer${w.newCust === 1 ? '' : 's'}${deltaRaw(w.newCust, p.newCust)}`;
+const returningLine   = `${w.returningCust} of ${w.totalOrders} orders (${Math.round(w.repeatRate * 100)}% repeat rate)`;
+const prevRepeatLine  = p.totalOrders > 0 ? `_last week: ${Math.round(p.repeatRate * 100)}%_` : '_last week: no orders_';
+const aovLine         = `S$${fmtSGD(w.aov)}${pctTag(w.aov, p.aov)}`;
+
+let topLine;
+if (!w.topCustomer) {
+  topLine = '_No identified customers this week._';
+} else {
+  const tc = w.topCustomer;
+  topLine = `${tc.label} — S$${fmtSGD(tc.revenue)} (${tc.orders} order${tc.orders === 1 ? '' : 's'})`;
+}
+
+const msg = `👥 *Bon Pet Customer Metrics*
+_${ranges.week_label}_
+
+🆕 *New customers*
+${newCustLine}
+
+🔁 *Returning customers*
+${returningLine}
+${prevRepeatLine}
+
+💵 *Avg order value*
+${aovLine}
+
+🏆 *Top customer this week*
+${topLine}`;
+
+return [{
+  json: {
+    message: msg,
+    week: w,
+    prev_week: p,
+  }
+}];
+"""
+
+
+def uid():
+    return str(uuid.uuid4())
+
+
+def http(method, path, body=None):
+    api_key = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
+    req = urllib.request.Request(
+        f"{API}{path}",
+        data=json.dumps(body).encode() if body is not None else None,
+        method=method,
+        headers={
+            "X-N8N-API-KEY": api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req) as r:
+            raw = r.read().decode()
+            return r.status, (json.loads(raw) if raw else None)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        try:
+            return e.code, json.loads(body)
+        except Exception:
+            return e.code, body
+
+
+def shopify_node(name, pos, url_expr):
+    return {
+        "parameters": {
+            "url": url_expr,
+            "authentication": "predefinedCredentialType",
+            "nodeCredentialType": "shopifyAccessTokenApi",
+            "options": {},
+        },
+        "id": uid(),
+        "name": name,
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": pos,
+        "credentials": {
+            "shopifyAccessTokenApi": {"id": SHOPIFY_CRED_ID, "name": SHOPIFY_CRED_NAME}
+        },
+    }
+
+
+def code_node(name, pos, js):
+    return {
+        "parameters": {"jsCode": js},
+        "id": uid(),
+        "name": name,
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": pos,
+    }
+
+
+def whatsapp_node(name, pos, phone):
+    return {
+        "parameters": {
+            "method": "POST",
+            "url": WA_URL,
+            "sendHeaders": True,
+            "headerParameters": {
+                "parameters": [
+                    {"name": "Content-Type", "value": "application/json"},
+                    {"name": "X-API-Key", "value": WA_KEY},
+                ]
+            },
+            "sendBody": True,
+            "bodyParameters": {
+                "parameters": [
+                    {"name": "phone_number", "value": phone},
+                    {"name": "message", "value": "={{ $json.message }}"},
+                ]
+            },
+            "options": {},
+        },
+        "id": uid(),
+        "name": name,
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": pos,
+    }
+
+
+def build():
+    schedule = {
+        "parameters": {
+            "rule": {"interval": [{"field": "cronExpression", "expression": "15 9 * * 1"}]}
+        },
+        "id": uid(),
+        "name": "Mon 9:15 AM SGT",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.3,
+        "position": [0, 400],
+    }
+
+    manual = {
+        "parameters": {
+            "httpMethod": "POST",
+            "path": MANUAL_WEBHOOK_ID,
+            "responseMode": "onReceived",
+            "options": {},
+        },
+        "id": uid(),
+        "name": "Manual Trigger (Webhook)",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [0, 200],
+        "webhookId": MANUAL_WEBHOOK_ID,
+    }
+
+    set_dates = code_node("Set Date Ranges", [240, 400], DATE_RANGES_JS)
+
+    base = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API}"
+    fetch_orders = shopify_node(
+        "Fetch Orders", [480, 400],
+        "=" + base + "/orders.json?status=any&financial_status=paid"
+        "&created_at_min={{ $json.fetch_start }}"
+        "&created_at_max={{ $json.fetch_end }}"
+        "&limit=250&fields=id,cancelled_at,financial_status,created_at,total_price,customer,email,contact_email,billing_address"
+    )
+
+    aggregate = code_node("Aggregate & Format", [720, 400], AGGREGATE_JS)
+
+    wa_sends = [
+        whatsapp_node(f"Send WhatsApp #{i+1}", [960, 200 + i * 100], p)
+        for i, p in enumerate(RECIPIENTS)
+    ]
+    telegram_send = telegram_send_node(
+        "Send Telegram Weslee", [960, 200 + len(RECIPIENTS) * 100]
+    )
+
+    nodes = [schedule, manual, set_dates, fetch_orders, aggregate, *wa_sends, telegram_send]
+
+    connections = {
+        schedule["name"]: {
+            "main": [[{"node": set_dates["name"], "type": "main", "index": 0}]]
+        },
+        manual["name"]: {
+            "main": [[{"node": set_dates["name"], "type": "main", "index": 0}]]
+        },
+        set_dates["name"]: {
+            "main": [[{"node": fetch_orders["name"], "type": "main", "index": 0}]]
+        },
+        fetch_orders["name"]: {
+            "main": [[{"node": aggregate["name"], "type": "main", "index": 0}]]
+        },
+        aggregate["name"]: {
+            "main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*wa_sends, telegram_send]]]
+        },
+    }
+
+    return {
+        "name": WF_NAME,
+        "nodes": nodes,
+        "connections": connections,
+        "settings": {"executionOrder": "v1"},
+    }
+
+
+def find_existing():
+    status, data = http("GET", "/workflows?limit=250")
+    if status >= 300:
+        return None
+    for wf in data.get("data", []):
+        if wf.get("name") == WF_NAME:
+            return wf["id"]
+    return None
+
+
+if __name__ == "__main__":
+    payload = build()
+    out = os.path.expanduser("~/n8n-bonpet/customer_metrics_payload.json")
+    with open(out, "w") as f:
+        json.dump(payload, f, indent=2)
+    print(f"Built payload: {len(payload['nodes'])} nodes → {out}")
+
+    existing_id = find_existing()
+    if existing_id:
+        print(f"Found existing workflow {existing_id} — updating (PUT)")
+        status, body = http("PUT", f"/workflows/{existing_id}", payload)
+        new_id = existing_id
+    else:
+        print("No existing workflow with this name — creating (POST)")
+        status, body = http("POST", "/workflows", payload)
+        new_id = body.get("id") if isinstance(body, dict) else None
+
+    print(f"HTTP {status}")
+    if isinstance(body, dict):
+        print(json.dumps({k: body[k] for k in ("id", "name", "active") if k in body}, indent=2))
+
+    if new_id and status < 300:
+        status_t, body_t = http(
+            "PUT", f"/workflows/{new_id}/transfer",
+            {"destinationProjectId": TEAM_PROJECT_ID},
+        )
+        if status_t < 300:
+            print(f"Transferred to team project {TEAM_PROJECT_ID}")
+        elif status_t == 400 and "already" in str(body_t).lower():
+            print("Already in team project")
+        else:
+            print(f"Transfer HTTP {status_t}: {body_t}")

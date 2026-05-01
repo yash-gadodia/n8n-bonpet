@@ -1,0 +1,35 @@
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n-test-local
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=false
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678
+      - GENERIC_TIMEZONE=Asia/Singapore
+      - DB_TYPE=sqlite
+      - N8N_DIAGNOSTICS_ENABLED=false
+    volumes:
+      - n8n_test_data:/home/node/.n8n
+    restart: unless-stopped
+
+  wa-mock:
+    image: python:3.11-slim
+    container_name: wa-mock
+    ports:
+      - "9999:9999"
+    working_dir: /app
+    volumes:
+      - ./mocks:/app/mocks
+      - ./requirements.txt:/app/requirements.txt
+    command: >
+      sh -c "pip install --no-cache-dir flask &&
+             python mocks/wa_mock.py"
+    restart: unless-stopped
+
+volumes:
+  n8n_test_data:

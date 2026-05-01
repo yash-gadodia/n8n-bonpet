@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Logs / generated payloads
+*.log
+*_payload.json
+
+# PII — must NOT be committed
+active_subscriber_*.json
+*_sent_phones.json
+customer_*.json
+
+# Local dev junk
+.DS_Store
+.idea/
+.vscode/
+
+# Migration artifacts (snapshots of old workflows = contain pre-refactor hardcoded credentials)
+migration_*.log
+migration_*/
+
+# Exports — customer/order CSVs contain PII
+exports/
+*.csv
+
+# Output artifacts of build scripts
+*.disabled
+
+# n8n workflow JSON snapshots — may contain old hardcoded credentials
+raw/
+
+# One-shot migration tools that contain credential literals as regex constants
+refactor_to_keychain.py
