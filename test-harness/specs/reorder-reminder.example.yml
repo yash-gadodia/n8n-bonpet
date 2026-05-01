@@ -1,0 +1,56 @@
+# Sample test spec for the reorder-reminder workflow.
+# Format: load fixtures, trigger workflow, assert expected WA messages.
+
+workflow_id: reorder_reminder_v2
+description: |
+  Daily 6 PM SGT reorder nudge. Should send to customers with last_order
+  43-90 days ago who are NOT active subscribers and NOT in 7-day cooldown.
+
+fixtures:
+  customers:
+    - phone: "+6591111111"
+      last_order_date: "2026-02-25"   # 59 days ago, eligible
+      is_subscriber: false
+      sent_log_recent_days: null
+
+    - phone: "+6592222222"
+      last_order_date: "2026-04-20"   # 5 days ago, NOT eligible (too recent)
+      is_subscriber: false
+      sent_log_recent_days: null
+
+    - phone: "+6593333333"
+      last_order_date: "2026-03-10"   # 46 days ago BUT subscriber, exclude
+      is_subscriber: true
+      sent_log_recent_days: null
+
+    - phone: "+6594444444"
+      last_order_date: "2026-03-01"   # 55 days ago, eligible BUT in cooldown
+      is_subscriber: false
+      sent_log_recent_days: 3         # got a different WA 3 days ago
+
+trigger:
+  type: webhook
+  path: /webhook/reorder-reminder-test
+  payload: {}
+
+expected:
+  wa_messages:
+    - phone: "+6591111111"
+      template: reorder_reminder
+      must_contain:
+        - "Bon Pet"
+      must_not_contain:
+        - "—"   # em-dash check (brand voice)
+
+  not_sent_to:
+    - "+6592222222"   # too recent
+    - "+6593333333"   # subscriber
+    - "+6594444444"   # cooldown
+
+  cooldown_writes:
+    - phone: "+6591111111"
+      workflow: reorder_reminder_v2
+
+assertions:
+  total_messages_sent: 1
+  unique_phones_sent: 1

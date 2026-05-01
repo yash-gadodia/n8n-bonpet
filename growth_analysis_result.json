@@ -1,0 +1,81 @@
+{
+  "total_orders_analyzed": 1672,
+  "dedup_unique": 1672,
+  "months": [
+    {
+      "month": "2025-04",
+      "revenue": 4367.52,
+      "orders": 211,
+      "aov": 20.7
+    },
+    {
+      "month": "2025-05",
+      "revenue": 5238.73,
+      "orders": 110,
+      "aov": 47.62
+    },
+    {
+      "month": "2025-06",
+      "revenue": 5620.78,
+      "orders": 168,
+      "aov": 33.46
+    },
+    {
+      "month": "2025-07",
+      "revenue": 6473.81,
+      "orders": 164,
+      "aov": 39.47
+    },
+    {
+      "month": "2025-08",
+      "revenue": 6355.89,
+      "orders": 121,
+      "aov": 52.53
+    },
+    {
+      "month": "2025-09",
+      "revenue": 7284.42,
+      "orders": 189,
+      "aov": 38.54
+    },
+    {
+      "month": "2025-10",
+      "revenue": 8430.24,
+      "orders": 182,
+      "aov": 46.32
+    },
+    {
+      "month": "2025-11",
+      "revenue": 7299.98,
+      "orders": 141,
+      "aov": 51.77
+    },
+    {
+      "month": "2025-12",
+      "revenue": 5528.22,
+      "orders": 85,
+      "aov": 65.04
+    },
+    {
+      "month": "2026-01",
+      "revenue": 5640.33,
+      "orders": 81,
+      "aov": 69.63
+    },
+    {
+      "month": "2026-02",
+      "revenue": 5906.05,
+      "orders": 87,
+      "aov": 67.89
+    },
+    {
+      "month": "2026-03",
+      "revenue": 5744.12,
+      "orders": 100,
+      "aov": 57.44
+    }
+  ],
+  "avg_last_12": 6157.51,
+  "avg_last_6": 6424.82,
+  "avg_last_3": 5763.5
+}
