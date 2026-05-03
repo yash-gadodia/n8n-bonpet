@@ -12,6 +12,7 @@ import urllib.error
 from _sent_log import (
     read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
+from _blacklist import BLACKLIST_JS_SNIPPET
 from _notify import telegram_send_node
 import subprocess
 
@@ -107,7 +108,7 @@ function normalizePhone(p) {
   if (digits.length >= 10 && digits.length <= 15) return '+' + digits;
   return '';
 }
-""" + COOLDOWN_JS_SNIPPET + r"""
+""" + COOLDOWN_JS_SNIPPET + BLACKLIST_JS_SNIPPET + r"""
 
 const sentEmails = new Set();
 for (const r of sentRows) {
@@ -174,6 +175,11 @@ for (const c of customerRows) {
     continue;
   }
 
+  if (isBlacklisted(phone)) {
+    stats.skipped_blacklist = (stats.skipped_blacklist || 0) + 1;
+    continue;
+  }
+
   const firstName = String(j.first_name || '').trim() ||
                     String(j.last_name || '').trim();
 
@@ -214,14 +220,17 @@ const headerMsg = `🔁 *Win-back — ${modeTag}*\n📅 ${new Date().toISOString
   `• Already messaged: ${stats.already_sent}\n` +
   `• No phone: ${stats.no_phone}\n` +
   `• Invalid phone: ${stats.invalid_phone}\n` +
-  `• Global 7d cooldown: ${stats.skipped_global_cooldown}`;
+  `• Global 7d cooldown: ${stats.skipped_global_cooldown}\n` +
+  `• Blacklist: ${stats.skipped_blacklist || 0}`;
 
 const header = [{ json: { is_header: true, phone: YASH_PHONE, target_phone: YASH_PHONE, message: headerMsg } }];
 
 return header.concat(eligible);
 """
 
-FORMAT_MESSAGE_JS = r"""// Build winback msg per eligible customer. Header passes through untouched.
+FORMAT_MESSAGE_JS = r"""// Winback v2 — 3-burst pattern (msg1 hello, msg2 founder, msg3 question + soft link).
+// Each eligible customer emits 3 items in burst order. Send WA processes sequentially via
+// 2s batching. Drop Header filters seq===3 so per-customer dedup logs only once per customer.
 const DRY_RUN = __DRY_RUN__;
 const YASH_PHONE = '+6581394225';
 
@@ -232,41 +241,41 @@ for (const it of $input.all()) {
     out.push({ json: { target_phone: j.target_phone, message: j.message, is_header: true } });
     continue;
   }
-  const greeting = j.first_name ? `Hey ${j.first_name}!` : 'Hey there!';
-  const msg = `${greeting} 🐾\n\n` +
-    `The Bon Pet here. Been a while, hope your furkid's doing well 🙂\n\n` +
-    `What's new: Pork is now on the dog menu 🍖, Duck is now on the cat menu 🦆\n\n` +
-    `We're still a small SG team, growing thanks to pawrents like you. Every formula and ingredient ratio we use is public 🔍 https://thebonpet.com/pages/formulas\n\n` +
-    `No hidden fillers, no guesswork. PhD-formulated, AAFCO-balanced, gently cooked.\n\n` +
-    `Come back with 20% off: *WELCOMEBACK<3THEBONPET* 🎁\n` +
-    `Works on one-time or Subscribe & Save.\n\n` +
-    `🛍 Shop: https://thebonpet.com\n` +
-    `💬 Cat pawrents community: https://chat.whatsapp.com/BTh5sXiZBkKIewYLY3HDFC\n` +
-    `💬 Dog pawrents community: https://chat.whatsapp.com/G3OTmBkC5os1XeJYZT2RRL\n\n` +
-    `Any feedback or questions, just reply 💛\n\n` +
-    `❤️ The Bon Pet team`;
+  const firstName = j.first_name || 'pawrent';
+  const msg1 = `hihi 🐾`;
+  const msg2 = `yash & nic here from bon pet, been a while! 💛`;
+  const msg3 = `just checking in, how's your furkid? we recently launched pork for dogs 🍖 + duck for cats 🦆, peek if curious 🐾 https://thebonpet.com`;
+  const bursts = [msg1, msg2, msg3];
 
-  const dryPreview = `🧪 *DRY RUN — would send to ${j.first_name || 'customer'} (${j.phone})*\n` +
-    `📊 days_since=${j.days_since_last_order}  orders=${j.total_orders}  spent=$${j.total_spent}\n` +
-    `═══════════════════════════════════\n\n${msg}`;
+  const baseFields = {
+    email: j.email,
+    customer_id: j.customer_id,
+    first_name: firstName,
+    days_since_last_order: j.days_since_last_order,
+    phone: j.phone,
+    workflow: 'winback',
+    template: 'welcomeback_check_in',
+    sent_at: new Date().toISOString(),
+    order_id: '',
+    notes: `days_since=${j.days_since_last_order}`,
+    is_header: false,
+  };
 
-  out.push({
-    json: {
-      target_phone: DRY_RUN ? YASH_PHONE : j.phone,
-      message: DRY_RUN ? dryPreview : msg,
-      email: j.email,
-      customer_id: j.customer_id,
-      first_name: j.first_name,
-      days_since_last_order: j.days_since_last_order,
-      phone: j.phone,
-      workflow: 'winback',
-      template: 'welcomeback_20',
-      sent_at: new Date().toISOString(),
-      order_id: '',
-      notes: `days_since=${j.days_since_last_order}`,
-      is_header: false,
-    }
-  });
+  for (let i = 0; i < 3; i++) {
+    const seq = i + 1;
+    const liveMsg = bursts[i];
+    const dryPrefix = (seq === 1)
+      ? `🧪 [DRY · WB → ${firstName} ${j.phone} · ${seq}/3 · days_since=${j.days_since_last_order}]\n`
+      : `[${seq}/3]\n`;
+    out.push({
+      json: {
+        ...baseFields,
+        seq: seq,
+        target_phone: DRY_RUN ? YASH_PHONE : j.phone,
+        message: DRY_RUN ? dryPrefix + liveMsg : liveMsg,
+      }
+    });
+  }
 }
 return out;
 """
@@ -322,7 +331,7 @@ def read_sheet_node(name, pos, gid):
             "options": {},
         },
         "id": uid(), "name": name,
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": pos,
         "credentials": {"googleSheetsOAuth2Api": {"id": GS_CRED_ID, "name": GS_CRED_NAME}},
     }
@@ -342,12 +351,12 @@ def send_wa_node(name, pos):
                 {"name": "phone_number", "value": "={{ $json.target_phone }}"},
                 {"name": "message", "value": "={{ $json.message }}"},
             ]},
-            # Rate limit: 5s between sends so we don't look like a spam-blast.
+            # 2s batching = each customer experiences a tight ~4s 3-burst (msg1 → 2s → msg2 → 2s → msg3)
             "options": {
                 "batching": {
                     "batch": {
                         "batchSize": 1,
-                        "batchInterval": 5000,
+                        "batchInterval": 2000,
                     },
                 },
             },
@@ -395,7 +404,7 @@ def append_sent_node(pos):
             "options": {},
         },
         "id": uid(), "name": "Log Winback Sent",
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": pos,
         "credentials": {"googleSheetsOAuth2Api": {"id": GS_CRED_ID, "name": GS_CRED_NAME}},
         "disabled": SEND_WA_DISABLED or DRY_RUN,
@@ -408,7 +417,7 @@ def build():
             "rule": {"interval": [{"field": "cronExpression", "expression": "0 10 * * *"}]}
         },
         "id": uid(), "name": "Daily 10 AM SGT",
-        "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.3,
+        "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2,
         "position": [0, 400],
     }
 
@@ -430,7 +439,7 @@ def build():
     merge = {
         "parameters": {"numberInputs": 4},
         "id": uid(), "name": "Merge Reads",
-        "type": "n8n-nodes-base.merge", "typeVersion": 3.1,
+        "type": "n8n-nodes-base.merge", "typeVersion": 3,
         "position": [480, 500],
     }
 
@@ -443,8 +452,11 @@ def build():
     compute    = code_node("Find Eligible Customers", [720, 500], compute_js)
     format_msg = code_node("Format Message",          [960, 500], format_js)
     send       = send_wa_node("Send Winback WA",      [1200, 500])
+    # Reaches back to Format Message (NOT $input.all()) so phone/customer fields survive
+    # the HTTP Send WA response replacement — see feedback_n8n_http_input_passthrough memory.
+    # Filters seq===3 so dedup-log writes only once per customer (not 3× per burst).
     drop_hdr   = code_node("Drop Header",             [1440, 500],
-                           "return $input.all().filter(it => !it.json.is_header);")
+                           "return $('Format Message').all().filter(it => !it.json.is_header && it.json.seq === 3);")
     log_sent   = append_sent_node([1680, 500])
     log_global = append_global_sent_log_node([1920, 500])
     log_global["disabled"] = SEND_WA_DISABLED or DRY_RUN
@@ -486,8 +498,13 @@ def build():
             {"node": pass_header["name"], "type": "main", "index": 0},
         ]]},
         send["name"]:         {"main": [[{"node": drop_hdr["name"], "type": "main", "index": 0}]]},
-        drop_hdr["name"]:     {"main": [[{"node": log_sent["name"], "type": "main", "index": 0}]]},
-        log_sent["name"]:     {"main": [[{"node": log_global["name"], "type": "main", "index": 0}]]},
+        # Drop Header fans out to BOTH log nodes in parallel — fixes input-passthrough bug
+        # where Log Winback Sent's autoMap stripped the phone field before passing to
+        # Log Global Sent. See feedback_n8n_http_input_passthrough memory.
+        drop_hdr["name"]:     {"main": [[
+            {"node": log_sent["name"],   "type": "main", "index": 0},
+            {"node": log_global["name"], "type": "main", "index": 0},
+        ]]},
         pass_header["name"]:  {"main": [[
             {"node": send_telegram["name"], "type": "main", "index": 0},
             *[{"node": n["name"], "type": "main", "index": 0} for n in team_wa_sends],
