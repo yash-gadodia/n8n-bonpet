@@ -225,24 +225,20 @@ for (const [key, custOrders] of ordersByKey) {
   const petName = trialOrder.pet_name || 'your furkid';
   const cityOrArea = trialOrder.city || 'your place';
 
-  // 3-burst pattern: short hello → founder identification → open question.
-  // No promo codes, no shop links — replies route to humans who pitch contextually.
-  let msg1 = '', msg2 = '', msg3 = '';
+  // Single message — founder voice, casual SG tone, opens with hihi, ends with open question.
+  // No promo codes, no shop links; replies route to humans who pitch contextually.
+  let customerMsg = '';
   if (stepNum === 1) {
-    msg1 = `hihi 🐾`;
-    msg2 = `yash & nic here from bon pet, we're the founders 🙂`;
-    msg3 = `saw your trial pack went out about a week ago, just wanted to check in - how's your furkid doing? 🐾 would love to hear back from u, any feedback for us? anything we can improve?`;
+    customerMsg = `hihi 🐾 yash & nic here from bon pet, just wanted to check in - your trial pack went out about a week ago. how's your furkid doing? any feedback for us, anything we can improve? would love to hear back 💛`;
   } else if (stepNum === 2) {
-    msg1 = `hihi 🐾`;
-    msg2 = `yash & nic here from bon pet 🙂`;
-    msg3 = `been ~2 weeks since your trial pack - how's your furkid taking to it? if you're thinking about a regular pack lmk, happy to recommend something based on weight + activity 🐾`;
+    customerMsg = `hihi 🐾 yash & nic here from bon pet, been ~2 weeks since your trial pack - how's your furkid taking to it? if you're thinking about a regular pack lmk, happy to recommend something based on weight + activity 🐾`;
   } else if (stepNum === 3) {
-    msg1 = `hihi 🐾`;
-    msg2 = `yash & nic here from bon pet 🙂`;
-    msg3 = `last nudge from us - if your furkid liked the trial and you'd like to keep them on fresh food, just say the word and i'll sort you out. if not, no worries at all, we won't keep buzzing 💛`;
+    customerMsg = `hihi 🐾 yash & nic here from bon pet, last nudge from us - if your furkid liked the trial and you'd like to keep them on fresh food, just say the word and we'll sort you out. if not, no worries at all, we won't keep buzzing 💛`;
   }
 
-  const baseFields = {
+  const dryRunMsg = `🧪 [DRY · D${daysSince} → ${firstName} ${phone}]\n${customerMsg}`;
+
+  candidates.push({
     customer_email: trialOrder.email,
     customer_name: firstName,
     customer_phone: phone,
@@ -258,24 +254,9 @@ for (const [key, custOrders] of ordersByKey) {
     template: 'D' + daysSince,
     order_id: trialOrder.order_id,
     notes: 'step=' + stepNum,
-  };
-
-  // Emit 3 items in burst order. HTTP Send WA processes sequentially at 2s/item via batching.
-  // Only seq===3 propagates to Log Sent (Skip Header filters), so dedup stays per (phone, step_num).
-  const msgs = [msg1, msg2, msg3];
-  for (let i = 0; i < 3; i++) {
-    const seq = i + 1;
-    const liveMsg = msgs[i];
-    const dryPrefix = (seq === 1)
-      ? `🧪 [DRY · D${daysSince} → ${firstName} ${phone} · ${seq}/3]\n`
-      : `[${seq}/3]\n`;
-    candidates.push({
-      ...baseFields,
-      seq: seq,
-      target_phone: DRY_RUN ? YASH_PHONE : phone,
-      message: DRY_RUN ? dryPrefix + liveMsg : liveMsg,
-    });
-  }
+    target_phone: DRY_RUN ? YASH_PHONE : phone,
+    message: DRY_RUN ? dryRunMsg : customerMsg,
+  });
 
   if (stepNum === 1) stats.d7_sent++;
   else if (stepNum === 2) stats.d14_sent++;
@@ -425,9 +406,8 @@ def send_wa_node():
 def skip_header_filter_node():
     # Reaches back to the upstream Code node (NOT $input.all()) so phone/customer
     # fields survive the HTTP Send WA response replacement — see memory
-    # `feedback_n8n_http_input_passthrough`. Also drops seq 1 + 2 so Log Sent only
-    # records one row per (phone, step_num).
-    js = "return $('Compute Trial Candidates (D7/D14/D21)').all().filter(it => !it.json.is_header && it.json.seq === 3);"
+    # `feedback_n8n_http_input_passthrough`.
+    js = "return $('Compute Trial Candidates (D7/D14/D21)').all().filter(it => !it.json.is_header);"
     return {
         "parameters": {"jsCode": js},
         "id": uid(), "name": "Skip Header",

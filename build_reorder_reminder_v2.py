@@ -176,20 +176,17 @@ for (const [key, custOrders] of ordersByKey) {
   // Cart link — use stored cart_link from order (was computed at ingest)
   const cartLink = last.cart_link || 'https://thebonpet.com/collections/all';
 
-  // 3-burst pattern: short hello → founder + context → easy-reorder offer with cart link.
-  // No promo codes in body copy; replies route to humans who pitch contextually.
-  let msg1 = '', msg2 = '', msg3 = '';
+  // Single message — founder voice, casual SG tone, opens with hihi, ends with cart link as helpful offer.
+  let customerMsg = '';
   if (reminderNum === 1) {
-    msg1 = `hihi 🐾`;
-    msg2 = `yash & nic here from bon pet 🙂 saw your last order was ${daysSince} days back, your furkid prob running low soon 🥣`;
-    msg3 = `easy reorder if useful 🛒 ${cartLink} - or just lmk if you need a hand 💛`;
+    customerMsg = `hihi 🐾 yash & nic here from bon pet, saw your last order was ${daysSince} days back, your furkid prob running low soon 🥣 easy reorder if useful 🛒 ${cartLink} - or just lmk if you need a hand 💛`;
   } else {
-    msg1 = `hihi 🐾`;
-    msg2 = `yash & nic here from bon pet 👋 been ${daysSince} days since your last order, wanted to check ur furkid isn't running low`;
-    msg3 = `easy reorder when ready 🛒 ${cartLink} - any qs just reply 💛`;
+    customerMsg = `hihi 🐾 yash & nic here from bon pet, been ${daysSince} days since your last order, wanted to check ur furkid isn't running low. easy reorder when ready 🛒 ${cartLink} - any qs just reply 💛`;
   }
 
-  const baseFields = {
+  const dryRunMsg = `🧪 [DRY · R${reminderNum} → ${firstName} ${phone}]\n${customerMsg}`;
+
+  candidates.push({
     customer_email: last.email,
     customer_name: firstName,
     customer_phone: phone,
@@ -207,24 +204,9 @@ for (const [key, custOrders] of ordersByKey) {
     template: 'reminder_' + reminderNum,
     order_id: last.order_id,
     notes: 'cadence=' + cadence + 'd,days_since=' + daysSince,
-  };
-
-  // Emit 3 items in burst order. HTTP Send WA processes sequentially at 2s/item via batching.
-  // Only seq===3 propagates to Log Sent (Skip Header filter), so dedup stays per (phone, reminder).
-  const _bursts = [msg1, msg2, msg3];
-  for (let _i = 0; _i < 3; _i++) {
-    const seq = _i + 1;
-    const liveMsg = _bursts[_i];
-    const dryPrefix = (seq === 1)
-      ? `🧪 [DRY · R${reminderNum} → ${firstName} ${phone} · ${seq}/3]\n`
-      : `[${seq}/3]\n`;
-    candidates.push({
-      ...baseFields,
-      seq: seq,
-      target_phone: DRY_RUN ? YASH_PHONE : phone,
-      message: DRY_RUN ? dryPrefix + liveMsg : liveMsg,
-    });
-  }
+    target_phone: DRY_RUN ? YASH_PHONE : phone,
+    message: DRY_RUN ? dryRunMsg : customerMsg,
+  });
 }
 
 const diag = [
@@ -364,9 +346,8 @@ def send_wa_node():
 
 def skip_header_filter_node():
     # Reaches back to upstream Code node (not $input.all()) so phone/customer fields
-    # survive the HTTP Send WA response replacement. Filters seq===3 so dedup-log
-    # writes only once per customer (not 3× per burst). See feedback_n8n_http_input_passthrough.
-    js = "return $('Compute Reorder Candidates').all().filter(it => !it.json.is_header && it.json.seq === 3);"
+    # survive the HTTP Send WA response replacement. See feedback_n8n_http_input_passthrough.
+    js = "return $('Compute Reorder Candidates').all().filter(it => !it.json.is_header);"
     return {
         "parameters": {"jsCode": js},
         "id": uid(), "name": "Skip Header",

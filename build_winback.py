@@ -228,9 +228,7 @@ const header = [{ json: { is_header: true, phone: YASH_PHONE, target_phone: YASH
 return header.concat(eligible);
 """
 
-FORMAT_MESSAGE_JS = r"""// Winback v2 — 3-burst pattern (msg1 hello, msg2 founder, msg3 question + soft link).
-// Each eligible customer emits 3 items in burst order. Send WA processes sequentially via
-// 2s batching. Drop Header filters seq===3 so per-customer dedup logs only once per customer.
+FORMAT_MESSAGE_JS = r"""// Winback — single message, founder voice, casual SG tone, opens with hihi.
 const DRY_RUN = __DRY_RUN__;
 const YASH_PHONE = '+6581394225';
 
@@ -242,40 +240,26 @@ for (const it of $input.all()) {
     continue;
   }
   const firstName = j.first_name || 'pawrent';
-  const msg1 = `hihi 🐾`;
-  const msg2 = `yash & nic here from bon pet, been a while! 💛`;
-  const msg3 = `just checking in, how's your furkid? we recently launched pork for dogs 🍖 + duck for cats 🦆, peek if curious 🐾 https://thebonpet.com`;
-  const bursts = [msg1, msg2, msg3];
+  const msg = `hihi 🐾 yash & nic here from bon pet, been a while! just checking in, how's your furkid? we recently launched pork for dogs 🍖 + duck for cats 🦆, peek if curious 🐾 https://thebonpet.com`;
+  const dryPreview = `🧪 [DRY · WB → ${firstName} ${j.phone} · days_since=${j.days_since_last_order}]\n${msg}`;
 
-  const baseFields = {
-    email: j.email,
-    customer_id: j.customer_id,
-    first_name: firstName,
-    days_since_last_order: j.days_since_last_order,
-    phone: j.phone,
-    workflow: 'winback',
-    template: 'welcomeback_check_in',
-    sent_at: new Date().toISOString(),
-    order_id: '',
-    notes: `days_since=${j.days_since_last_order}`,
-    is_header: false,
-  };
-
-  for (let i = 0; i < 3; i++) {
-    const seq = i + 1;
-    const liveMsg = bursts[i];
-    const dryPrefix = (seq === 1)
-      ? `🧪 [DRY · WB → ${firstName} ${j.phone} · ${seq}/3 · days_since=${j.days_since_last_order}]\n`
-      : `[${seq}/3]\n`;
-    out.push({
-      json: {
-        ...baseFields,
-        seq: seq,
-        target_phone: DRY_RUN ? YASH_PHONE : j.phone,
-        message: DRY_RUN ? dryPrefix + liveMsg : liveMsg,
-      }
-    });
-  }
+  out.push({
+    json: {
+      target_phone: DRY_RUN ? YASH_PHONE : j.phone,
+      message: DRY_RUN ? dryPreview : msg,
+      email: j.email,
+      customer_id: j.customer_id,
+      first_name: firstName,
+      days_since_last_order: j.days_since_last_order,
+      phone: j.phone,
+      workflow: 'winback',
+      template: 'welcomeback_check_in',
+      sent_at: new Date().toISOString(),
+      order_id: '',
+      notes: `days_since=${j.days_since_last_order}`,
+      is_header: false,
+    }
+  });
 }
 return out;
 """
@@ -454,9 +438,8 @@ def build():
     send       = send_wa_node("Send Winback WA",      [1200, 500])
     # Reaches back to Format Message (NOT $input.all()) so phone/customer fields survive
     # the HTTP Send WA response replacement — see feedback_n8n_http_input_passthrough memory.
-    # Filters seq===3 so dedup-log writes only once per customer (not 3× per burst).
     drop_hdr   = code_node("Drop Header",             [1440, 500],
-                           "return $('Format Message').all().filter(it => !it.json.is_header && it.json.seq === 3);")
+                           "return $('Format Message').all().filter(it => !it.json.is_header);")
     log_sent   = append_sent_node([1680, 500])
     log_global = append_global_sent_log_node([1920, 500])
     log_global["disabled"] = SEND_WA_DISABLED or DRY_RUN
