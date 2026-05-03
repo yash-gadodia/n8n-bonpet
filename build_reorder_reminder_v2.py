@@ -8,22 +8,22 @@ Architecture:
 
 In DRY RUN, Send WA targets Yash only. Flip DRY_RUN const to false in the Code node + re-PUT to go live.
 """
-import json, uuid, os, urllib.request, urllib.error
+import json, uuid, os, subprocess, urllib.request, urllib.error
 from _notify import telegram_send_node
 from _sent_log import (
-import subprocess
     read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
+from _blacklist import BLACKLIST_JS_SNIPPET
 
 KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
 API = "https://n8n.thebonpet.com/api/v1"
 TEAM = "i1GSXBntwNvNqic8"
-GS_CRED = {"id": "sxbz0Cu8yhdi0RdN", "name": "Google Sheets account"}
+GS_CRED = {"id": "KLjk8w62GoEMImKa", "name": "Google Sheets account"}  # self-hosted ID; old Cloud was sxbz0Cu8yhdi0RdN
 SHEET_ID = "1GP0RBDnvl-tHBDRv6DRdrungM2BXM5Z-LnQxmzEeuXI"
 REORDER_SENT_GID = 800800
 REORDER_SENT_TAB = "reorder_reminder_sent"
 
-WF_ID = "AMd0mktMWn73UCbZ"
+WF_ID = "SUuwJMm0R6gNzXnm"  # self-hosted ID; old Cloud was AMd0mktMWn73UCbZ
 WEBHOOK_PATH = "trigger-reorder-now"
 SEND_WA_DISABLED = False  # flip True for verification, False for live
 
@@ -69,7 +69,7 @@ for (const it of $('Read Sent Log').all()) {
   const p = normalizePhone(it.json.phone);
   if (p) ALREADY_SENT_PHONES.add(p);
 }
-""" + COOLDOWN_JS_SNIPPET + r"""
+""" + COOLDOWN_JS_SNIPPET + BLACKLIST_JS_SNIPPET + r"""
 const DEFAULT_CADENCE_DAYS = 14;
 const GRAMS_PER_DAY = 150;
 const MIN_CADENCE = 5;
@@ -131,6 +131,7 @@ for (const [key, custOrders] of ordersByKey) {
   if (!phone) { stats.skipped_no_phone++; continue; }
   if (ALREADY_SENT_PHONES.has(phone)) { stats.skipped_already_sent = (stats.skipped_already_sent || 0) + 1; continue; }
   if (isInGlobalCooldown(phone)) { stats.skipped_global_cooldown = (stats.skipped_global_cooldown || 0) + 1; continue; }
+  if (isBlacklisted(phone)) { stats.skipped_blacklist = (stats.skipped_blacklist || 0) + 1; continue; }
 
   const firstName = last.first_name || 'there';
 
@@ -175,34 +176,23 @@ for (const [key, custOrders] of ordersByKey) {
   // Cart link — use stored cart_link from order (was computed at ingest)
   const cartLink = last.cart_link || 'https://thebonpet.com/collections/all';
 
-  const customerMsg = reminderNum === 1
-    ? `Hey ${firstName}! 🐾\n\n` +
-      `Just a quick check in. Your last Bon Pet order was ${daysSince} days ago so your furkid might be running low soon 🥣\n\n` +
-      `Easy reorder here:\n🛒 ${cartLink}\n\n` +
-      `And if you haven't tried Subscribe & Save yet, it's worth a look:\n` +
-      `✅ 30% off your first subscription order with code *FIRSTORDER<3THEBONPET*\n` +
-      `✅ 10% off every order after\n` +
-      `✅ Free delivery over $100\n` +
-      `✅ Any cadence between 1 to 6 weeks. Pause or cancel anytime.\n\n` +
-      `Just reply here if you need any help 🙂\n\n` +
-      `The Bon Pet Team ❤️`
-    : `Hey ${firstName} 👋\n\n` +
-      `Been a while since your last Bon Pet order (${daysSince} days). Wanted to check in and make sure your furkid isn't running low.\n\n` +
-      `Easy reorder:\n🛒 ${cartLink}\n\n` +
-      `If you're open to it, Subscribe & Save gets you 30% off the first order with code *FIRSTORDER<3THEBONPET* and 10% off every order after, plus free delivery over $100. Pause or cancel anytime.\n\n` +
-      `Any questions just reply here 🙂\n\n` +
-      `The Bon Pet Team ❤️`;
+  // 3-burst pattern: short hello → founder + context → easy-reorder offer with cart link.
+  // No promo codes in body copy; replies route to humans who pitch contextually.
+  let msg1 = '', msg2 = '', msg3 = '';
+  if (reminderNum === 1) {
+    msg1 = `hihi 🐾`;
+    msg2 = `yash & nic here from bon pet 🙂 saw your last order was ${daysSince} days back, your furkid prob running low soon 🥣`;
+    msg3 = `easy reorder if useful 🛒 ${cartLink} - or just lmk if you need a hand 💛`;
+  } else {
+    msg1 = `hihi 🐾`;
+    msg2 = `yash & nic here from bon pet 👋 been ${daysSince} days since your last order, wanted to check ur furkid isn't running low`;
+    msg3 = `easy reorder when ready 🛒 ${cartLink} - any qs just reply 💛`;
+  }
 
-  const dryRunMsg = `🧪 *DRY RUN — would send to ${firstName} (${phone})*\n` +
-    `📊 days_since=${daysSince}  cadence=${cadence}d  reminder=#${reminderNum}  past_orders=${custOrders.length}\n` +
-    `═══════════════════════════════════\n\n${customerMsg}`;
-
-  candidates.push({
+  const baseFields = {
     customer_email: last.email,
     customer_name: firstName,
     customer_phone: phone,
-    // Fields below feed sheet appends. reorder_reminder_sent uses phone/reminder_num/last_order_id;
-    // wa_sent_log (global) uses workflow/template/order_id/notes. Each append autoMaps by column name.
     phone: phone,
     first_name: firstName,
     sent_at: new Date().toISOString(),
@@ -217,9 +207,24 @@ for (const [key, custOrders] of ordersByKey) {
     template: 'reminder_' + reminderNum,
     order_id: last.order_id,
     notes: 'cadence=' + cadence + 'd,days_since=' + daysSince,
-    target_phone: DRY_RUN ? YASH_PHONE : phone,
-    message: DRY_RUN ? dryRunMsg : customerMsg,
-  });
+  };
+
+  // Emit 3 items in burst order. HTTP Send WA processes sequentially at 2s/item via batching.
+  // Only seq===3 propagates to Log Sent (Skip Header filter), so dedup stays per (phone, reminder).
+  const _bursts = [msg1, msg2, msg3];
+  for (let _i = 0; _i < 3; _i++) {
+    const seq = _i + 1;
+    const liveMsg = _bursts[_i];
+    const dryPrefix = (seq === 1)
+      ? `🧪 [DRY · R${reminderNum} → ${firstName} ${phone} · ${seq}/3]\n`
+      : `[${seq}/3]\n`;
+    candidates.push({
+      ...baseFields,
+      seq: seq,
+      target_phone: DRY_RUN ? YASH_PHONE : phone,
+      message: DRY_RUN ? dryPrefix + liveMsg : liveMsg,
+    });
+  }
 }
 
 const diag = [
@@ -286,7 +291,7 @@ def schedule_node():
     return {
         "parameters": {"rule": {"interval": [{"triggerAtHour": 18}]}},
         "id": uid(), "name": "Daily 6PM SGT",
-        "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.3,
+        "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2,
         "position": [0, 100],
     }
 
@@ -315,7 +320,7 @@ def gs_read_node(name, tab_gid, tab_name, position):
             "options": {},
         },
         "id": uid(), "name": name,
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": position,
         "credentials": {"googleSheetsOAuth2Api": GS_CRED},
     }
@@ -344,7 +349,10 @@ def send_wa_node():
                 {"name": "phone_number", "value": "={{ $json.target_phone }}"},
                 {"name": "message", "value": "={{ $json.message }}"},
             ]},
-            "options": {},
+            # 2s batching = each customer experiences a ~4s 3-burst before next customer's burst
+            "options": {
+                "batching": {"batch": {"batchSize": 1, "batchInterval": 2000}},
+            },
         },
         "id": uid(), "name": "Send WA",
         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
@@ -355,8 +363,12 @@ def send_wa_node():
 
 
 def skip_header_filter_node():
+    # Reaches back to upstream Code node (not $input.all()) so phone/customer fields
+    # survive the HTTP Send WA response replacement. Filters seq===3 so dedup-log
+    # writes only once per customer (not 3× per burst). See feedback_n8n_http_input_passthrough.
+    js = "return $('Compute Reorder Candidates').all().filter(it => !it.json.is_header && it.json.seq === 3);"
     return {
-        "parameters": {"jsCode": "// Drop the diagnostic header item — only log real customer sends.\nreturn $input.all().filter(it => !it.json.is_header);"},
+        "parameters": {"jsCode": js},
         "id": uid(), "name": "Skip Header",
         "type": "n8n-nodes-base.code", "typeVersion": 2,
         "position": [1200, 300],
@@ -391,7 +403,7 @@ def log_sent_node():
             "options": {},
         },
         "id": uid(), "name": "Log Sent",
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": [1440, 300],
         "credentials": {"googleSheetsOAuth2Api": GS_CRED},
         "onError": "continueRegularOutput",
@@ -432,8 +444,13 @@ connections = {
     ]]},
     send_wa["name"]: {"main": [[{"node": skip_header["name"], "type": "main", "index": 0}]]},
     # Chain per-workflow log → global log (both onError continueRegularOutput)
-    skip_header["name"]: {"main": [[{"node": log_sent["name"], "type": "main", "index": 0}]]},
-    log_sent["name"]: {"main": [[{"node": log_global["name"], "type": "main", "index": 0}]]},
+    # Skip Header fans out to BOTH log nodes in parallel — fixes input-passthrough bug
+    # where Log Sent's autoMap stripped the phone field before passing to Log Global Sent.
+    # See feedback_n8n_http_input_passthrough memory.
+    skip_header["name"]: {"main": [[
+        {"node": log_sent["name"],   "type": "main", "index": 0},
+        {"node": log_global["name"], "type": "main", "index": 0},
+    ]]},
     pass_header["name"]: {"main": [[{"node": send_telegram["name"], "type": "main", "index": 0}]]},
 }
 

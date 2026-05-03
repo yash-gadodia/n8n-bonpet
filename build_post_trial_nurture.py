@@ -16,24 +16,24 @@ Exclusion rules (hard-coded):
 
 In DRY RUN, Send WA targets Yash only. Flip DRY_RUN const to false in the Code node + re-PUT to go live.
 """
-import json, uuid, os, urllib.request, urllib.error
+import json, uuid, os, subprocess, urllib.request, urllib.error
 from _notify import telegram_send_node
 from _sent_log import (
-import subprocess
     read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
+from _blacklist import BLACKLIST_JS_SNIPPET
 
 KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
 API = "https://n8n.thebonpet.com/api/v1"
 TEAM = "i1GSXBntwNvNqic8"
-GS_CRED = {"id": "sxbz0Cu8yhdi0RdN", "name": "Google Sheets account"}
+GS_CRED = {"id": "KLjk8w62GoEMImKa", "name": "Google Sheets account"}  # self-hosted ID; old Cloud was sxbz0Cu8yhdi0RdN
 SHEET_ID = "1GP0RBDnvl-tHBDRv6DRdrungM2BXM5Z-LnQxmzEeuXI"
 POST_TRIAL_SENT_GID = 900900
 POST_TRIAL_SENT_TAB = "post_trial_sent"
 
 # Workflow ID (populated on first create, then update this for future edits)
 WF_NAME = "Post-Trial Nurture — WhatsApp 7/14/21"
-WF_ID = "UUKCHxXItI4yEG4g"  # Created 2026-04-23
+WF_ID = "VR7jZxPaiRCwdIaP"  # Self-hosted ID (post-migration 2026-04-27); old Cloud ID was UUKCHxXItI4yEG4g
 
 WEBHOOK_PATH = "trigger-post-trial-now"
 SEND_WA_DISABLED = False  # flip True for verification, False for live
@@ -59,7 +59,8 @@ TRIAL_PACK_SKUS = [
     "trial-pack",  # fallback for variants
 ]
 
-CODE_JS = r"""// Post-Trial Nurture v1 — reads orders sheet for trial pack buyers at days 7/14/21.
+CODE_JS = r"""// Post-Trial Nurture v2 — 3-burst pattern (msg1 hello, msg2 founder, msg3 question).
+// Reads orders sheet for trial pack buyers at days 7/14/21.
 const DRY_RUN = false;
 const YASH_PHONE = '+6581394225';
 const TEAM_PHONES = ['+6581394225', '+6598531677', '+6590108515', '+6587993341', '+6581114800', '+6282240119788'];
@@ -86,7 +87,7 @@ function normalizePhone(p) {
   if (digits.length >= 8 && digits.length <= 15) return '+' + digits;
   return '';
 }
-""" + COOLDOWN_JS_SNIPPET + r"""
+""" + COOLDOWN_JS_SNIPPET + BLACKLIST_JS_SNIPPET + r"""
 
 // Parse order_date (usually ISO string) to days since
 function daysSinceOrder(orderDateStr) {
@@ -214,49 +215,38 @@ for (const [key, custOrders] of ordersByKey) {
     continue;
   }
 
+  // Exclusion: repo-versioned blacklist (BLACKLIST.txt). Hard-stop opt-outs.
+  if (isBlacklisted(phone)) {
+    stats.skipped_blacklist = (stats.skipped_blacklist || 0) + 1;
+    continue;
+  }
+
   const firstName = trialOrder.first_name || 'pawrent';
   const petName = trialOrder.pet_name || 'your furkid';
   const cityOrArea = trialOrder.city || 'your place';
 
-  let customerMsg = '';
+  // 3-burst pattern: short hello → founder identification → open question.
+  // No promo codes, no shop links — replies route to humans who pitch contextually.
+  let msg1 = '', msg2 = '', msg3 = '';
   if (stepNum === 1) {
-    // Day 7: "how's it going?" — no ask, just care
-    customerMsg =
-      `Hey ${firstName} 🐾 it's been a week since your trial pack from The Bon Pet landed at ${cityOrArea}.\n\n` +
-      `How did ${petName} take to it? Picky? Licked the bowl clean? We genuinely want to know 💛\n\n` +
-      `If you've got any feedback (or questions about transition pace, portion size, anything really) - just reply to this message. It comes straight to us.\n\n` +
-      `❤️ The Bon Pet team`;
+    msg1 = `hihi 🐾`;
+    msg2 = `yash & nic here from bon pet, we're the founders 🙂`;
+    msg3 = `saw your trial pack went out about a week ago, just wanted to check in - how's your furkid doing? 🐾 would love to hear back from u, any feedback for us? anything we can improve?`;
   } else if (stepNum === 2) {
-    // Day 14: "ready for the full pack?" — soft pitch
-    customerMsg =
-      `Hi again ${firstName} 🐶🐱\n\n` +
-      `Most of our trial pawrents tell us their furkids perk up by the second week of fresh food. If that's ${petName} too, it might be time for the full pack 🎉\n\n` +
-      `We've got single-protein meals + multi-protein bundles on thebonpet.com, and our most popular option is the subscribe-and-save plan (10% off, skip or pause anytime, max 6-weekly).\n\n` +
-      `Not sure what to order? Tell us ${petName}'s weight + activity level and we'll send a recommendation - no sales pressure, promise 🐾\n\n` +
-      `👉 Shop Dog: https://thebonpet.com/collections/dogs\n` +
-      `👉 Shop Cat: https://thebonpet.com/collections/cats`;
+    msg1 = `hihi 🐾`;
+    msg2 = `yash & nic here from bon pet 🙂`;
+    msg3 = `been ~2 weeks since your trial pack - how's your furkid taking to it? if you're thinking about a regular pack lmk, happy to recommend something based on weight + activity 🐾`;
   } else if (stepNum === 3) {
-    // Day 21: "last chance - 30% off first sub" — hard offer
-    customerMsg =
-      `${firstName}, one last nudge from us 💌\n\n` +
-      `If you haven't ordered again since the trial, we'd love to get ${petName} on a regular fresh-food rhythm. Use code FIRSTORDER<3THEBONPET at checkout for 30% off your first subscription + 10% ongoing (until you cancel).\n\n` +
-      `Deepest offer we've got - and we don't run it publicly. Valid for 7 days from today.\n\n` +
-      `👉 https://thebonpet.com/collections/subscriptions (or any product page, apply code at checkout)\n\n` +
-      `No reply = no more nudges from us, we respect your inbox 🐾\n❤️ The Bon Pet team`;
+    msg1 = `hihi 🐾`;
+    msg2 = `yash & nic here from bon pet 🙂`;
+    msg3 = `last nudge from us - if your furkid liked the trial and you'd like to keep them on fresh food, just say the word and i'll sort you out. if not, no worries at all, we won't keep buzzing 💛`;
   }
 
-  const dryRunMsg = `🧪 *DRY RUN — would send Day ${stepNum} to ${firstName} (${phone})*\n` +
-    `📊 days_since_trial=${daysSince}  trial_date=${trialOrder.order_date.split('T')[0]}\n` +
-    `═══════════════════════════════════\n\n${customerMsg}`;
-
-  candidates.push({
+  const baseFields = {
     customer_email: trialOrder.email,
     customer_name: firstName,
     customer_phone: phone,
     pet_name: petName,
-    // Fields below feed sheet appends. post_trial_sent uses step_num/trial_order_id;
-    // wa_sent_log (global) uses workflow/template/order_id/notes. autoMapInputData
-    // on each append picks only the matching column names.
     phone: phone,
     first_name: firstName,
     sent_at: new Date().toISOString(),
@@ -268,9 +258,24 @@ for (const [key, custOrders] of ordersByKey) {
     template: 'D' + daysSince,
     order_id: trialOrder.order_id,
     notes: 'step=' + stepNum,
-    target_phone: DRY_RUN ? YASH_PHONE : phone,
-    message: DRY_RUN ? dryRunMsg : customerMsg,
-  });
+  };
+
+  // Emit 3 items in burst order. HTTP Send WA processes sequentially at 2s/item via batching.
+  // Only seq===3 propagates to Log Sent (Skip Header filters), so dedup stays per (phone, step_num).
+  const msgs = [msg1, msg2, msg3];
+  for (let i = 0; i < 3; i++) {
+    const seq = i + 1;
+    const liveMsg = msgs[i];
+    const dryPrefix = (seq === 1)
+      ? `🧪 [DRY · D${daysSince} → ${firstName} ${phone} · ${seq}/3]\n`
+      : `[${seq}/3]\n`;
+    candidates.push({
+      ...baseFields,
+      seq: seq,
+      target_phone: DRY_RUN ? YASH_PHONE : phone,
+      message: DRY_RUN ? dryPrefix + liveMsg : liveMsg,
+    });
+  }
 
   if (stepNum === 1) stats.d7_sent++;
   else if (stepNum === 2) stats.d14_sent++;
@@ -287,6 +292,7 @@ const diag = [
   `• Skipped (no phone): ${stats.skipped_no_phone}`,
   `• Skipped (already sent this step): ${stats.skipped_already_sent}`,
   `• Skipped (global 7d cooldown): ${stats.skipped_global_cooldown || 0}`,
+  `• Skipped (blacklist): ${stats.skipped_blacklist || 0}`,
   ``,
   `📬 *Sends this run*`,
   `• D7 (how's it going): ${stats.d7_sent}`,
@@ -339,7 +345,7 @@ def schedule_node():
     return {
         "parameters": {"rule": {"interval": [{"triggerAtHour": 10}]}},
         "id": uid(), "name": "Daily 10AM SGT",
-        "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.3,
+        "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2,
         "position": [0, 100],
     }
 
@@ -370,7 +376,7 @@ def gs_read_node(name, tab_gid, tab_name, position):
             "options": {},
         },
         "id": uid(), "name": name,
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": position,
         "credentials": {"googleSheetsOAuth2Api": GS_CRED},
     }
@@ -387,7 +393,10 @@ def code_node():
 
 
 def send_wa_node():
-    """Send WhatsApp message via thebonpet.com WA endpoint"""
+    """Send WhatsApp message via thebonpet.com WA endpoint.
+    Batching: 1 item / 2000ms — produces 2s gap between messages, so each customer
+    experiences a tight ~4s 3-burst (msg1 → 2s → msg2 → 2s → msg3) before the next
+    customer's burst starts."""
     return {
         "parameters": {
             "method": "POST", "url": WA_URL,
@@ -401,7 +410,9 @@ def send_wa_node():
                 {"name": "phone_number", "value": "={{ $json.target_phone }}"},
                 {"name": "message", "value": "={{ $json.message }}"},
             ]},
-            "options": {},
+            "options": {
+                "batching": {"batch": {"batchSize": 1, "batchInterval": 2000}},
+            },
         },
         "id": uid(), "name": "Send WA",
         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
@@ -412,8 +423,13 @@ def send_wa_node():
 
 
 def skip_header_filter_node():
+    # Reaches back to the upstream Code node (NOT $input.all()) so phone/customer
+    # fields survive the HTTP Send WA response replacement — see memory
+    # `feedback_n8n_http_input_passthrough`. Also drops seq 1 + 2 so Log Sent only
+    # records one row per (phone, step_num).
+    js = "return $('Compute Trial Candidates (D7/D14/D21)').all().filter(it => !it.json.is_header && it.json.seq === 3);"
     return {
-        "parameters": {"jsCode": "// Drop the diagnostic header item — only log real customer sends.\nreturn $input.all().filter(it => !it.json.is_header);"},
+        "parameters": {"jsCode": js},
         "id": uid(), "name": "Skip Header",
         "type": "n8n-nodes-base.code", "typeVersion": 2,
         "position": [1200, 300],
@@ -448,7 +464,7 @@ def log_sent_node():
             "options": {},
         },
         "id": uid(), "name": "Log Sent",
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": [1440, 300],
         "credentials": {"googleSheetsOAuth2Api": GS_CRED},
         "onError": "continueRegularOutput",
@@ -488,8 +504,13 @@ connections = {
     ]]},
     send_wa["name"]: {"main": [[{"node": skip_header["name"], "type": "main", "index": 0}]]},
     # Chain per-workflow log → global log (both onError continueRegularOutput)
-    skip_header["name"]: {"main": [[{"node": log_sent["name"], "type": "main", "index": 0}]]},
-    log_sent["name"]: {"main": [[{"node": log_global["name"], "type": "main", "index": 0}]]},
+    # Skip Header fans out to BOTH log nodes in parallel — fixes input-passthrough bug
+    # where Log Sent's autoMap stripped the phone field before passing to Log Global Sent.
+    # See feedback_n8n_http_input_passthrough memory.
+    skip_header["name"]: {"main": [[
+        {"node": log_sent["name"],   "type": "main", "index": 0},
+        {"node": log_global["name"], "type": "main", "index": 0},
+    ]]},
     pass_header["name"]: {"main": [[{"node": send_telegram["name"], "type": "main", "index": 0}]]},
 }
 
