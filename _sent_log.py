@@ -26,7 +26,7 @@ SHEET_ID = "1GP0RBDnvl-tHBDRv6DRdrungM2BXM5Z-LnQxmzEeuXI"
 WA_SENT_LOG_GID = 700800
 WA_SENT_LOG_TAB = "wa_sent_log"
 WA_SENT_LOG_COLUMNS = ["phone", "workflow", "template", "sent_at", "order_id", "notes"]
-GS_CRED = {"id": "sxbz0Cu8yhdi0RdN", "name": "Google Sheets account"}
+GS_CRED = {"id": "KLjk8w62GoEMImKa", "name": "Google Sheets account"}  # self-hosted ID; old Cloud was sxbz0Cu8yhdi0RdN
 
 
 def read_global_sent_log_node(position, name="Read Global Sent Log"):
@@ -46,7 +46,7 @@ def read_global_sent_log_node(position, name="Read Global Sent Log"):
             "options": {},
         },
         "id": str(uuid.uuid4()), "name": name,
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": position,
         "credentials": {"googleSheetsOAuth2Api": GS_CRED},
         "executeOnce": True,
@@ -77,7 +77,7 @@ def append_global_sent_log_node(position, name="Log Global Sent"):
             "options": {},
         },
         "id": str(uuid.uuid4()), "name": name,
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": position,
         "credentials": {"googleSheetsOAuth2Api": GS_CRED},
         "onError": "continueRegularOutput",

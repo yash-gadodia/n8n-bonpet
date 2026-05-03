@@ -1,0 +1,15 @@
+# Customer messaging BLACKLIST — phones that should NEVER receive
+# automated WhatsApp from any n8n workflow.
+#
+# Format: one normalized phone per line (+CountryCode + digits, no spaces).
+#         Lines starting with # are ignored. End-of-line # comments stripped.
+#
+# All `build_*.py` scripts in this repo inject this list into their workflow's
+# Compute node via `_blacklist.BLACKLIST_JS_SNIPPET` + an `isBlacklisted(phone)`
+# check in the per-customer filter loop.
+#
+# To add a phone: append a line below, then run the relevant `build_<workflow>.py`
+# scripts to redeploy. Existing schedule-driven runs WILL respect the blacklist
+# on the next run after rebuild.
+
++6591123297  # 2026-05-03 customer opt-out request after the post-spam incident
