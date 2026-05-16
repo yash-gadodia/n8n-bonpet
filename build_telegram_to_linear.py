@@ -65,6 +65,7 @@ LINEAR_USER_IDS = {
     "yash@thebonpet.com":        "c3231b5f-8db1-4c15-8b63-35fb3e980e86",
 }
 ERROR_ALERTER_ID = "c3Vk2nt9WINzp9GH"
+PICKUP_READY_WEBHOOK = "https://n8n.thebonpet.com/webhook/selfcollect-pickup-ready-3f9c1a"
 
 TELEGRAM_HANDLES = {
     "nicolas@thebonpet.com":     "nicolaswee",
@@ -92,13 +93,14 @@ def uid():
     return str(uuid.uuid4())
 
 
-PARSE_MENTION_JS = r"""// Filter for @weslee_bot mention; extract message context
+PARSE_MENTION_JS = r"""// Accept (a) @weslee_bot mentions in groups, OR (b) any private-chat DM (auto-handled as "register")
 const upd = $input.first().json;
 const body = upd.body || upd;
 const msg = body.message || body.edited_message || body.channel_post || null;
 if (!msg || !msg.text) return [];
 
 const text = msg.text;
+const isPrivate = msg.chat && msg.chat.type === 'private';
 const entities = msg.entities || [];
 let mentioned = false;
 for (const e of entities) {
@@ -107,12 +109,57 @@ for (const e of entities) {
     if (m === '@__BOT_USERNAME__') { mentioned = true; break; }
   }
 }
-if (!mentioned) return [];
+if (!mentioned && !isPrivate) return [];
 
 const cleaned = text
   .replace(new RegExp('@__BOT_USERNAME__\\b', 'gi'), '')
   .replace(/\s+/g, ' ')
   .trim();
+
+// FAST-PATH: pickup-ready intent → route to Self-Collect Pickup Ready workflow.
+// Matches "order #3293 ready for self collection" (+ variants: no #, hyphen, no space).
+const pickupMatch = cleaned.match(/\border\s*#?(\d+)[^\n]{0,40}ready[^\n]{0,40}self.?collect/i);
+if (pickupMatch) {
+  return [{
+    json: {
+      _pickup_ready: true,
+      pickup_order_num: pickupMatch[1],
+      chat_id: msg.chat.id,
+      message_thread_id: msg.message_thread_id || null,
+      reply_to_message_id: msg.message_id,
+      sender_name: (msg.from && (msg.from.first_name || msg.from.username)) || 'Unknown',
+    }
+  }];
+}
+
+// Private DM /start (or similar) → quick Chat ID reply, skip Claude
+const startCmds = /^\s*(\/start|\/register|register|chat[\s_-]?id)\b/i;
+if (isPrivate && startCmds.test(cleaned)) {
+  const sn = (msg.from && (msg.from.first_name || msg.from.username)) || 'friend';
+  const un = (msg.from && msg.from.username) || '';
+  const reply = [
+    `👋 Hi ${sn}!`,
+    '',
+    `Your Chat ID: \`${msg.chat.id}\``,
+    un ? `Handle: @${un}` : '',
+    '',
+    `Once added to the roster, you'll get a 6pm SGT DM with your open Linear tasks.`,
+    '',
+    `Meanwhile, you can DM me commands anytime:`,
+    `  • create a new ticket: "make tix to call vendor"`,
+    `  • see your tasks: "what's mine?"`,
+    `  • update: "mark TBP-30 done"`,
+  ].join('\n');
+  return [{
+    json: {
+      _private_register: true,
+      chat_id: msg.chat.id,
+      reply_to_message_id: msg.message_id,
+      message_thread_id: null,
+      text: reply,
+    }
+  }];
+}
 
 return [{
   json: {
@@ -133,6 +180,16 @@ return [{
 CLAUDE_REQ_JS = r"""// Build Claude classifier request — multi-intent
 const ctx = $input.first().json;
 
+// Map Telegram username → Linear first-name handle so Claude can resolve "my"/"mine".
+const SENDER_TO_LINEAR = {
+  'yashgadodia': 'yash',
+  'nicolaswee':  'nicolas',
+  'rachellrqq':  'rachel',
+  'gotchykid':   'shaun',
+};
+const handle = (ctx.sender_username || '').toLowerCase();
+const senderLinear = SENDER_TO_LINEAR[handle] || null;
+
 const system = `You are routing chat messages to @weslee_bot, an internal assistant for The Bon Pet (Singapore-based fresh pet food brand, Shopify DTC, n8n automation, custom OMS).
 
 Classify the message and respond with ONLY valid JSON.
@@ -140,13 +197,14 @@ Classify the message and respond with ONLY valid JSON.
 Schema:
 {
   "action": "create" | "summary" | "update" | "help",
-  // For "create" — always include all 4 fields:
+  // For "create" — always include title/description/category/priority; assignee is optional:
   "title": "<= 70 chars, action-oriented, no trailing period",
   "description": "1-2 sentences",
   "category": "Dev" | "Marketing" | "Ops" | "BD" | "Customer Support" | "OMS" | "Whatsapp" | "Other",
   "priority": 0|1|2|3|4,
+  "assignee": "rachel" | "shaun" | "nicolas" | "yash" | null,
   // For "summary" — optional filter:
-  "filter": { "category": "...", "stale": true, "assignee": "first name or email" },
+  "filter": { "category": "...", "stale": true, "assignee": "first name or email", "unassigned": true },
   // For "update" — required identifier + at least one field in updates:
   "identifier": "TBP-23",
   "updates": {
@@ -170,6 +228,12 @@ Routing:
 - "summary" when user ASKS about existing tasks ("what's open?", "show me dev tasks", "what's stale?", "what is rachel working on?", "summarise tasks", "list backlog")
 - "help" when user is asking what the bot can do, or the message is empty/unclear/just hi
 - "create" by default — when the user is describing a NEW task or thing to do
+   - If the user says "assign to X" / "for X" / "give to X" / "X to ..." in the same message, set assignee to that person (rachel|shaun|nicolas|yash). Otherwise assignee = null.
+   - Examples:
+     - "make a tix assign yash to fix homepage"      → action: create, assignee: "yash"
+     - "for nicolas: order packaging tomorrow"        → action: create, assignee: "nicolas"
+     - "rachel pls draft IG caption for sous vide"    → action: create, assignee: "rachel"
+     - "fix the abandoned cart job"                   → action: create, assignee: null
 
 Categories for "create" / "update":
 - Dev: code, n8n workflows, website, automation, bugs, scripts
@@ -183,11 +247,16 @@ Categories for "create" / "update":
 
 Priority cues: "urgent"/"asap"/"now" → 1; "important"/"high" → 2; default → 3; "low"/"someday" → 4.
 
-For "summary": parse "dev"/"marketing"/etc → filter.category. "stale"/"old" → filter.stale=true. Names like "rachel"/"shaun"/"nicolas"/"yash" → filter.assignee.
+For "summary": parse "dev"/"marketing"/etc → filter.category. "stale"/"old" → filter.stale=true. Names like "rachel"/"shaun"/"nicolas"/"yash" → filter.assignee. Phrases like "unassigned", "no owner", "no one", "nobody", "orphan", "without an owner", "not assigned" → filter.unassigned=true (and DO NOT set filter.assignee in this case).
+
+Self-reference: if the message uses "my", "mine", "me", or "i" (e.g. "what's mine?", "my open tix", "what am i working on", "assign to me"), resolve to the sender's Linear handle shown in "Sender Linear handle:" below. If no Linear handle is shown for the sender, omit filter.assignee for summaries and omit assignee for creates.
 
 Output ONLY JSON. No preamble. No code fences.`;
 
-const user = `From: ${ctx.sender_name}\nMessage: ${ctx.text}`;
+const senderLine = senderLinear
+  ? `From: ${ctx.sender_name}\nSender Linear handle: ${senderLinear}`
+  : `From: ${ctx.sender_name}\nSender Linear handle: (unknown — do not infer)`;
+const user = `${senderLine}\nMessage: ${ctx.text}`;
 
 return [{
   json: {
@@ -233,8 +302,11 @@ const inp = $input.first().json;
 const ctx = inp._ctx;
 const p = inp.parsed || {};
 const labels = __LABELS__;
+const users  = __USERS__;
 
 const labelIds = labels[p.category] ? [labels[p.category]] : [];
+const assigneeName = p.assignee ? String(p.assignee).toLowerCase().replace(/^@/, '') : null;
+const assigneeId = assigneeName ? (users[assigneeName] || null) : null;
 const description = [
   p.description || '',
   '',
@@ -250,9 +322,12 @@ return [{
     category: p.category || 'Other',
     priority: typeof p.priority === 'number' ? p.priority : 3,
     labelIds,
+    assigneeId,
+    assigneeName: assigneeId ? assigneeName : null,
   }
 }];
-""".replace("__LABELS__", json.dumps(LINEAR_LABEL_IDS))
+""".replace("__LABELS__", json.dumps(LINEAR_LABEL_IDS)) \
+   .replace("__USERS__",  json.dumps(LINEAR_USER_IDS))
 
 
 CREATE_REPLY_JS = r"""// Build Telegram reply for created issue
@@ -265,7 +340,8 @@ if (!issue) {
                     reply_to_message_id: ticket._ctx.reply_to_message_id,
                     text: `❌ Couldn't create ticket: ${errs}` } }];
 }
-const text = `✅ Created [${issue.identifier}](${issue.url})\n*${ticket.title}*\nCategory: \`${ticket.category}\` · Priority: ${ticket.priority}`;
+const assignedLine = ticket.assigneeName ? ` · Assigned: ${ticket.assigneeName}` : '';
+const text = `✅ Created [${issue.identifier}](${issue.url})\n*${ticket.title}*\nCategory: \`${ticket.category}\` · Priority: ${ticket.priority}${assignedLine}`;
 return [{ json: {
   chat_id: ticket._ctx.chat_id,
   message_thread_id: ticket._ctx.message_thread_id,
@@ -318,7 +394,10 @@ if (filter.stale) {
   filtered = filtered.filter(i => isStale(i.updatedAt));
   filterDesc.push('stale only');
 }
-if (filter.assignee) {
+if (filter.unassigned) {
+  filtered = filtered.filter(i => !i.assignee);
+  filterDesc.push('unassigned only');
+} else if (filter.assignee) {
   const a = filter.assignee.toLowerCase();
   filtered = filtered.filter(i => {
     const asn = i.assignee || {};
@@ -539,6 +618,61 @@ def build():
         "id": uid(), "name": "Parse Mention", "type": "n8n-nodes-base.code",
         "typeVersion": 2, "position": [240, 400],
     }
+    is_pickup_ready = {
+        "parameters": {
+            "conditions": {
+                "options": {"caseSensitive": True, "leftValue": "", "typeValidation": "strict"},
+                "conditions": [{
+                    "id": uid(),
+                    "leftValue": "={{ $json._pickup_ready }}",
+                    "rightValue": "true",
+                    "operator": {"type": "boolean", "operation": "true", "singleValue": True},
+                }],
+                "combinator": "and",
+            },
+            "options": {},
+        },
+        "id": uid(), "name": "Is Pickup Ready", "type": "n8n-nodes-base.if",
+        "typeVersion": 2, "position": [340, 400],
+    }
+    forward_pickup = {
+        "parameters": {
+            "method": "POST",
+            "url": PICKUP_READY_WEBHOOK,
+            "sendBody": True, "specifyBody": "json",
+            "jsonBody": (
+                "={{ JSON.stringify({ "
+                "order_number: $json.pickup_order_num, "
+                "chat_id: $json.chat_id, "
+                "message_thread_id: $json.message_thread_id, "
+                "reply_to_message_id: $json.reply_to_message_id, "
+                "sender_name: $json.sender_name "
+                "}) }}"
+            ),
+            "options": {},
+        },
+        "id": uid(), "name": "Forward to Pickup Webhook",
+        "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+        "position": [560, 200],
+        "onError": "continueRegularOutput",
+    }
+    is_private_register = {
+        "parameters": {
+            "conditions": {
+                "options": {"caseSensitive": True, "leftValue": "", "typeValidation": "strict"},
+                "conditions": [{
+                    "id": uid(),
+                    "leftValue": "={{ $json._private_register }}",
+                    "rightValue": "true",
+                    "operator": {"type": "boolean", "operation": "true", "singleValue": True},
+                }],
+                "combinator": "and",
+            },
+            "options": {},
+        },
+        "id": uid(), "name": "Is Private Register", "type": "n8n-nodes-base.if",
+        "typeVersion": 2, "position": [560, 400],
+    }
     build_claude = {
         "parameters": {"jsCode": CLAUDE_REQ_JS},
         "id": uid(), "name": "Build Claude Request", "type": "n8n-nodes-base.code",
@@ -605,13 +739,14 @@ def build():
             "sendBody": True, "specifyBody": "json",
             "jsonBody": (
                 '={{ JSON.stringify({ query: '
-                '"mutation IssueCreate($title:String!,$description:String,$teamId:String!,$stateId:String,$labelIds:[String!],$priority:Int)'
-                '{ issueCreate(input:{title:$title,description:$description,teamId:$teamId,stateId:$stateId,labelIds:$labelIds,priority:$priority})'
+                '"mutation IssueCreate($title:String!,$description:String,$teamId:String!,$stateId:String,$labelIds:[String!],$priority:Int,$assigneeId:String)'
+                '{ issueCreate(input:{title:$title,description:$description,teamId:$teamId,stateId:$stateId,labelIds:$labelIds,priority:$priority,assigneeId:$assigneeId})'
                 '{ success issue { identifier url } } }",'
                 'variables: { '
                 'title: $json.title, description: $json.description, '
                 'teamId: "' + LINEAR_TBP_TEAM_ID + '", stateId: "' + LINEAR_BACKLOG_STATE_ID + '", '
-                'labelIds: $json.labelIds, priority: $json.priority '
+                'labelIds: $json.labelIds, priority: $json.priority, '
+                'assigneeId: $json.assigneeId '
                 '} }) }}'
             ),
             "options": {},
@@ -737,7 +872,8 @@ def build():
         "typeVersion": 4.2, "position": [2160, 400],
     }
 
-    nodes = [webhook, parse_mention, build_claude, claude_call, parse_intent, switch,
+    nodes = [webhook, parse_mention, is_pickup_ready, forward_pickup, is_private_register,
+             build_claude, claude_call, parse_intent, switch,
              build_mutation, linear_create, create_reply,
              linear_fetch, summary_format,
              lookup_issue, build_update, linear_update, update_reply,
@@ -746,7 +882,15 @@ def build():
 
     connections = {
         webhook["name"]:        {"main": [[{"node": parse_mention["name"], "type": "main", "index": 0}]]},
-        parse_mention["name"]:  {"main": [[{"node": build_claude["name"],  "type": "main", "index": 0}]]},
+        parse_mention["name"]:  {"main": [[{"node": is_pickup_ready["name"], "type": "main", "index": 0}]]},
+        is_pickup_ready["name"]: {"main": [
+            [{"node": forward_pickup["name"],      "type": "main", "index": 0}],  # true  → forward + end
+            [{"node": is_private_register["name"], "type": "main", "index": 0}],  # false → existing flow
+        ]},
+        is_private_register["name"]: {"main": [
+            [{"node": telegram_reply["name"], "type": "main", "index": 0}],  # true → DM reply
+            [{"node": build_claude["name"],   "type": "main", "index": 0}],  # false → Claude classify
+        ]},
         build_claude["name"]:   {"main": [[{"node": claude_call["name"],   "type": "main", "index": 0}]]},
         claude_call["name"]:    {"main": [[{"node": parse_intent["name"],  "type": "main", "index": 0}]]},
         parse_intent["name"]:   {"main": [[{"node": switch["name"],        "type": "main", "index": 0}]]},
