@@ -70,7 +70,7 @@ def build_preview_message(o):
         APOLOGY_NOTE,
         "",
         "Any questions, just reply here. Thanks so much for choosing us 💛",
-        "<3 The Bon Pet team",
+        "❤️ The Bon Pet team",
     ]
     return "\n".join(lines)
 
