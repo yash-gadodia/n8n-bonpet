@@ -31,6 +31,9 @@ LINEAR_TOKEN = subprocess.check_output(
 ANTHROPIC_KEY = subprocess.check_output(
     ["security", "find-generic-password", "-a", "yash", "-s", "yash-anthropic-key", "-w"]
 ).decode().strip()
+WMS_PAT = subprocess.check_output(
+    ["security", "find-generic-password", "-a", "thebonpet", "-s", "wms-pat", "-w"]
+).decode().strip()
 
 LINEAR_TBP_TEAM_ID = "12118ee6-e5f2-4d01-98a4-54c9ff5c86f4"
 LINEAR_BACKLOG_STATE_ID = "8c7d9052-a913-4871-b7a1-b5fac536c3dc"
@@ -196,7 +199,7 @@ Classify the message and respond with ONLY valid JSON.
 
 Schema:
 {
-  "action": "create" | "summary" | "update" | "help",
+  "action": "create" | "summary" | "update" | "help" | "packlist" | "send_pickup_wa",
   // For "create" — always include title/description/category/priority; assignee is optional:
   "title": "<= 70 chars, action-oriented, no trailing period",
   "description": "1-2 sentences",
@@ -205,6 +208,10 @@ Schema:
   "assignee": "rachel" | "shaun" | "nicolas" | "yash" | null,
   // For "summary" — optional filter:
   "filter": { "category": "...", "stale": true, "assignee": "first name or email", "unassigned": true },
+  // For "packlist" — optional filter:
+  "pack_filter": { "self_collect_only": true | false },
+  // For "send_pickup_wa" — required confirmation flag:
+  "confirmed": true | false,
   // For "update" — required identifier + at least one field in updates:
   "identifier": "TBP-23",
   "updates": {
@@ -216,6 +223,25 @@ Schema:
 }
 
 Routing:
+- "send_pickup_wa" when user wants to SEND THE PICKUP-READY WHATSAPP TEMPLATE to customers whose self-collect orders are packed/ready. This fans out the WA + auto-fulfills OMS for ALL unfulfilled self-collect orders. Triggers:
+   - "fire wa notif", "send wa notif", "send the wa notif", "fire the wa"
+   - "send whatsapp notification for all self collection orders"
+   - "send pickup ready WAs", "blast pickup ready", "fire pickup ready notifs"
+   - "let customers know their orders are ready", "tell customers to pick up"
+   - "orders are packed, fire wa", "all packed send wa"
+   - This is the DEFAULT meaning of "send wa notif" in this chat — there is no other generic-WA broadcast intent exposed here. If a user says "send wa notif" without further specifics, this is the intent.
+   - Set "confirmed": true ONLY if the message contains an explicit confirmation phrase:
+       "confirm pickup wa", "yes send pickup wa", "fire pickup wa now",
+       "blast pickup wa", "send it now", "go ahead fire wa", "yes fire wa"
+     Otherwise set "confirmed": false (will trigger a DRY preview reply).
+   - Do NOT use this for: SINGLE-order pickup-ready tags ("order #3293 ready for self collection") — those are handled before Claude sees the message.
+- "packlist" when user is asking about PHYSICAL ORDERS that need to be PACKED / SHIPPED / FULFILLED (NOT Linear tickets). These hit the live OMS, not Linear. Triggers:
+   - "what do I need to pack?", "what's left to pack?", "show me the packlist", "pack list"
+   - "which self-collection orders do I need to pack?", "what self-collect orders are open?"
+   - "what orders are unfulfilled?", "what orders need fulfilling?", "open orders to ship"
+   - "what's pending pickup?", "orders waiting for self collection"
+   - DEFAULT pack_filter.self_collect_only = true. NinjaVan / cold-chain orders are packed by the Pet Axis manufacturer, not the user — so plain "what do I need to pack?" should ONLY show self-collection orders.
+   - Set pack_filter.self_collect_only = false ONLY if the user explicitly asks for all orders: "all orders", "every order", "include delivery", "include ninjavan", "include njv", "show ninjavan orders", "everything unfulfilled".
 - "update" when user wants to MODIFY an existing issue (mentioned by ID like TBP-23, "issue 23", or just "23"):
    - "mark TBP-23 done", "close TBP-9", "TBP-19 is done"  → state: Done
    - "move TBP-31 to in progress", "start TBP-11"          → state: In Progress
@@ -225,7 +251,7 @@ Routing:
    - "tag TBP-30 as Marketing"                             → category
    - User can chain: "mark TBP-23 done and assign to rachel"  → updates: { state: "Done", assignee: "rachel" }
    - If user says just a number ("close 23"), set identifier as "TBP-23"
-- "summary" when user ASKS about existing tasks ("what's open?", "show me dev tasks", "what's stale?", "what is rachel working on?", "summarise tasks", "list backlog")
+- "summary" when user ASKS about LINEAR TASKS/TICKETS ("what's open?", "show me dev tasks", "what's stale?", "what is rachel working on?", "summarise tasks", "list backlog"). DO NOT use "summary" for questions about orders/packing/shipping — use "packlist" for those.
 - "help" when user is asking what the bot can do, or the message is empty/unclear/just hi
 - "create" by default — when the user is describing a NEW task or thing to do
    - If the user says "assign to X" / "for X" / "give to X" / "X to ..." in the same message, set assignee to that person (rachel|shaun|nicolas|yash). Otherwise assignee = null.
@@ -575,6 +601,220 @@ return [{ json: {
 """
 
 
+# ─────────────────────── PACKLIST branch ───────────────────────────────
+PACKLIST_FORMAT_JS = r"""// Format the WMS unfulfilled-orders response for Telegram
+const ctx = $('Parse Intent').first().json._ctx;
+const intentParsed = $('Parse Intent').first().json.parsed || {};
+const pf = intentParsed.pack_filter || {};
+const selfOnly = pf.self_collect_only === true;
+
+const resp = $input.first().json;
+let orders = (resp && resp.orders) || [];
+const totalAll = (resp && resp.total != null) ? resp.total : orders.length;
+
+if (selfOnly) {
+  orders = orders.filter(o => String(o.delivery_method || '').toUpperCase() === 'SELF_COLLECTION');
+}
+
+// Sort ascending by pickup_date (nulls last)
+orders.sort((a, b) => {
+  const da = a.pickup_date ? new Date(a.pickup_date).getTime() : 1e15;
+  const db = b.pickup_date ? new Date(b.pickup_date).getTime() : 1e15;
+  return da - db;
+});
+
+const METHOD_LABEL = {
+  'SELF_COLLECTION':    '🏪 Self-Collection',
+  'NINJAVAN_NEXTDAY':   '🚚 NinjaVan Next-Day',
+  'NINJAVAN_COLD_CHAIN':'❄️ NinjaVan Cold-Chain',
+};
+
+function fmtDate(d) {
+  if (!d) return 'no date';
+  try {
+    const dt = new Date(d);
+    return dt.toLocaleDateString('en-SG', { month: 'short', day: 'numeric', timeZone: 'Asia/Singapore' });
+  } catch (e) { return String(d).slice(0, 10); }
+}
+
+function summarizeItems(items) {
+  if (!items || !items.length) return '';
+  const parts = items.map(it => {
+    const q = it.quantity || 1;
+    const t = (it.title || it.sku || 'item').replace(/\s*\(.*?\)\s*/g, '').trim();
+    return `${q}× ${t}`;
+  });
+  return parts.join(', ');
+}
+
+const groups = { 'SELF_COLLECTION': [], 'NINJAVAN_NEXTDAY': [], 'NINJAVAN_COLD_CHAIN': [], '_OTHER': [] };
+for (const o of orders) {
+  const m = String(o.delivery_method || '').toUpperCase();
+  if (groups[m]) groups[m].push(o);
+  else groups['_OTHER'].push(o);
+}
+
+const lines = [];
+const heading = selfOnly ? '📦 *Unfulfilled Self-Collection Orders*' : '📦 *Unfulfilled Orders — Packlist*';
+lines.push(heading);
+
+if (orders.length === 0) {
+  lines.push(selfOnly
+    ? '_No unfulfilled self-collection orders 🎉_'
+    : '_No unfulfilled orders 🎉_');
+  return [{ json: {
+    chat_id: ctx.chat_id,
+    message_thread_id: ctx.message_thread_id,
+    reply_to_message_id: ctx.reply_to_message_id,
+    text: lines.join('\n'),
+  } }];
+}
+
+lines.push(`_${orders.length} order${orders.length === 1 ? '' : 's'} pending${selfOnly ? '' : ` · ${totalAll} total unfulfilled in WMS`}_`);
+lines.push('');
+
+const MAX_PER_GROUP = 15;
+const order_groups = selfOnly
+  ? [['SELF_COLLECTION', groups['SELF_COLLECTION']]]
+  : [['SELF_COLLECTION', groups['SELF_COLLECTION']], ['NINJAVAN_NEXTDAY', groups['NINJAVAN_NEXTDAY']], ['NINJAVAN_COLD_CHAIN', groups['NINJAVAN_COLD_CHAIN']], ['_OTHER', groups['_OTHER']]];
+
+for (const [method, list] of order_groups) {
+  if (!list.length) continue;
+  const label = METHOD_LABEL[method] || '📌 Other';
+  lines.push(`${label} *(${list.length})*`);
+  for (const o of list.slice(0, MAX_PER_GROUP)) {
+    const fn = o.shipping_first_name || (o.shipping_name || '').split(' ')[0] || 'unknown';
+    const items = summarizeItems(o.line_items);
+    const itemsTrunc = items.length > 60 ? items.slice(0, 57) + '…' : items;
+    lines.push(`  • \`${o.order_name}\` · ${fmtDate(o.pickup_date)} · ${fn}${itemsTrunc ? ` — ${itemsTrunc}` : ''}`);
+  }
+  if (list.length > MAX_PER_GROUP) lines.push(`  _+${list.length - MAX_PER_GROUP} more_`);
+  lines.push('');
+}
+
+lines.push('_View OMS: https://oms.thebonpet.com/orders_');
+
+return [{ json: {
+  chat_id: ctx.chat_id,
+  message_thread_id: ctx.message_thread_id,
+  reply_to_message_id: ctx.reply_to_message_id,
+  text: lines.join('\n'),
+} }];
+"""
+
+
+# ─────────────────────── SEND_PICKUP_WA branch ────────────────────────────
+PICKUP_WA_PREVIEW_JS = r"""// DRY preview for pickup-ready WA bulk blast
+const ctx = $('Parse Intent').first().json._ctx;
+const resp = $input.first().json;
+const orders = (resp && resp.orders) || [];
+
+if (orders.length === 0) {
+  return [{ json: {
+    chat_id: ctx.chat_id,
+    message_thread_id: ctx.message_thread_id,
+    reply_to_message_id: ctx.reply_to_message_id,
+    text: '🎉 *No unfulfilled self-collect orders* — nothing to send.',
+  } }];
+}
+
+function fmtDate(d) {
+  if (!d) return 'no date';
+  try {
+    const dt = new Date(d);
+    return dt.toLocaleDateString('en-SG', { month: 'short', day: 'numeric', timeZone: 'Asia/Singapore' });
+  } catch (e) { return String(d).slice(0, 10); }
+}
+
+const lines = [];
+lines.push(`📲 *Pickup-Ready WA Blast — DRY RUN*`);
+lines.push(`_${orders.length} customer${orders.length === 1 ? '' : 's'} will receive the pickup-ready template + auto-fulfill on OMS:_`);
+lines.push('');
+for (const o of orders) {
+  const fn = o.shipping_first_name || (o.shipping_name || '').split(' ')[0] || 'unknown';
+  const phone = o.shipping_phone || '(no phone)';
+  lines.push(`  • \`${o.order_name}\` · ${fmtDate(o.pickup_date)} · ${fn} · ${phone}`);
+}
+lines.push('');
+lines.push(`⏱  Send pace: 8s between WAs (~${orders.length * 8}s total)`);
+lines.push('');
+lines.push('Reply *@weslee\\_bot confirm pickup wa* to fire.');
+lines.push('_Note: Shopify is read-only for automation — mark fulfillment there manually if needed._');
+
+return [{ json: {
+  chat_id: ctx.chat_id,
+  message_thread_id: ctx.message_thread_id,
+  reply_to_message_id: ctx.reply_to_message_id,
+  text: lines.join('\n'),
+} }];
+"""
+
+FIRE_PICKUP_WA_JS = r"""// Sequentially POST to the pickup-ready webhook for each unfulfilled self-collect order
+const ctx = $('Parse Intent').first().json._ctx;
+const resp = $input.first().json;
+const orders = (resp && resp.orders) || [];
+const PICKUP_URL = 'https://n8n.thebonpet.com/webhook/selfcollect-pickup-ready-3f9c1a';
+const DELAY_MS = 8000;
+
+if (orders.length === 0) {
+  return [{ json: {
+    chat_id: ctx.chat_id,
+    message_thread_id: ctx.message_thread_id,
+    reply_to_message_id: ctx.reply_to_message_id,
+    text: '🎉 No unfulfilled self-collect orders — nothing to send.',
+  } }];
+}
+
+const results = [];
+for (let i = 0; i < orders.length; i++) {
+  const o = orders[i];
+  const orderNumStr = String(o.order_name || '').replace(/^#/, '').trim();
+  const orderNum = parseInt(orderNumStr, 10);
+  if (!Number.isFinite(orderNum)) {
+    results.push({ order: o.order_name, ok: false, status: 0, error: 'bad order_name' });
+    continue;
+  }
+  try {
+    const r = await fetch(PICKUP_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        order_number: orderNum,
+        sender_name: `Bulk via Telegram (${ctx.sender_name || 'unknown'})`,
+      }),
+    });
+    results.push({ order: o.order_name, ok: r.status < 300, status: r.status });
+  } catch (e) {
+    results.push({ order: o.order_name, ok: false, status: 0, error: String(e).slice(0, 100) });
+  }
+  if (i < orders.length - 1) {
+    await new Promise(res => setTimeout(res, DELAY_MS));
+  }
+}
+
+const okCount = results.filter(r => r.ok).length;
+const failCount = results.length - okCount;
+const lines = [];
+lines.push(`✅ *Pickup-Ready WA Blast Complete*`);
+lines.push(`_${okCount}/${results.length} sent${failCount ? ` · ⚠️ ${failCount} failed` : ''}_`);
+lines.push('');
+for (const r of results) {
+  const icon = r.ok ? '✅' : '❌';
+  const detail = r.ok ? '' : ` · ${r.status}${r.error ? ' ' + r.error : ''}`;
+  lines.push(`  ${icon} \`${r.order}\`${detail}`);
+}
+lines.push('');
+lines.push('_OMS auto-fulfilled. Shopify NOT updated (read-only rule)._');
+
+return [{ json: {
+  chat_id: ctx.chat_id,
+  message_thread_id: ctx.message_thread_id,
+  reply_to_message_id: ctx.reply_to_message_id,
+  text: lines.join('\n'),
+} }];
+"""
+
+
 # ─────────────────────── HELP branch ────────────────────────────────────
 HELP_FORMAT_JS = r"""const ctx = $('Parse Intent').first().json._ctx;
 const text = `🤖 *@weslee_bot — what I can do*
@@ -584,11 +824,20 @@ const text = `🤖 *@weslee_bot — what I can do*
   • _@weslee fix abandoned cart OOM next sprint_
   • _@weslee follow up with KohePets on retail_
 
-📋 *Show open tasks* (filterable):
+📋 *Show open Linear tasks* (filterable):
   • _@weslee what's open?_
   • _@weslee show dev tasks_
   • _@weslee what's stale?_
   • _@weslee what is rachel working on?_
+
+📦 *Show unfulfilled orders* (live OMS):
+  • _@weslee what do I need to pack?_
+  • _@weslee which self-collection orders are open?_
+  • _@weslee show the packlist_
+
+📲 *Send pickup-ready WAs* (auto-fulfills OMS, 2-step confirm):
+  • _@weslee send wa notif_ → shows DRY preview
+  • _@weslee confirm pickup wa_ → fires for all unfulfilled self-collect orders
 
 🛠️ *Update a ticket* (state/assignee/priority/category):
   • _@weslee mark TBP-23 done_
@@ -714,7 +963,7 @@ def build():
         }
     switch = {
         "parameters": {
-            "rules": {"values": [rule("create"), rule("summary"), rule("update"), rule("help")]},
+            "rules": {"values": [rule("create"), rule("summary"), rule("update"), rule("help"), rule("packlist"), rule("send_pickup_wa")]},
             "options": {"fallbackOutput": "extra", "renameFallbackOutput": "create"},
         },
         "id": uid(), "name": "Route Intent", "type": "n8n-nodes-base.switch",
@@ -848,6 +1097,81 @@ def build():
         "typeVersion": 2, "position": [1440, 800],
     }
 
+    # PACKLIST branch — query the live OMS for unfulfilled orders
+    wms_fetch = {
+        "parameters": {
+            "method": "GET",
+            "url": "https://api.thebonpet.com/wms/orders",
+            "sendQuery": True,
+            "queryParameters": {"parameters": [
+                {"name": "fulfillment_status", "value": "UNFULFILLED"},
+                {"name": "limit", "value": "200"},
+            ]},
+            "sendHeaders": True,
+            "headerParameters": {"parameters": [
+                {"name": "Authorization", "value": f"Bearer {WMS_PAT}"},
+                {"name": "User-Agent", "value": UA},
+            ]},
+            "options": {},
+        },
+        "id": uid(), "name": "Fetch WMS Orders", "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2, "position": [1440, 1000],
+    }
+    packlist_format = {
+        "parameters": {"jsCode": PACKLIST_FORMAT_JS},
+        "id": uid(), "name": "Format Packlist", "type": "n8n-nodes-base.code",
+        "typeVersion": 2, "position": [1680, 1000],
+    }
+
+    # SEND_PICKUP_WA branch — fetch self-collect unfulfilled, branch on confirmed flag
+    fetch_pickup_orders = {
+        "parameters": {
+            "method": "GET",
+            "url": "https://api.thebonpet.com/wms/orders",
+            "sendQuery": True,
+            "queryParameters": {"parameters": [
+                {"name": "fulfillment_status", "value": "UNFULFILLED"},
+                {"name": "delivery_method", "value": "SELF_COLLECTION"},
+                {"name": "limit", "value": "200"},
+            ]},
+            "sendHeaders": True,
+            "headerParameters": {"parameters": [
+                {"name": "Authorization", "value": f"Bearer {WMS_PAT}"},
+                {"name": "User-Agent", "value": UA},
+            ]},
+            "options": {},
+        },
+        "id": uid(), "name": "Fetch Pickup Orders", "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2, "position": [1440, 1200],
+    }
+    is_pickup_confirmed = {
+        "parameters": {
+            "conditions": {
+                "options": {"caseSensitive": True, "leftValue": "", "typeValidation": "strict"},
+                "conditions": [{
+                    "id": uid(),
+                    "leftValue": "={{ $('Parse Intent').first().json.parsed.confirmed }}",
+                    "rightValue": "true",
+                    "operator": {"type": "boolean", "operation": "true", "singleValue": True},
+                }],
+                "combinator": "and",
+            },
+            "options": {},
+        },
+        "id": uid(), "name": "Is Pickup Confirmed", "type": "n8n-nodes-base.if",
+        "typeVersion": 2, "position": [1680, 1200],
+    }
+    fire_pickup_wa = {
+        "parameters": {"jsCode": FIRE_PICKUP_WA_JS},
+        "id": uid(), "name": "Fire Pickup WAs", "type": "n8n-nodes-base.code",
+        "typeVersion": 2, "position": [1920, 1100],
+    }
+    format_pickup_preview = {
+        "parameters": {"jsCode": PICKUP_WA_PREVIEW_JS},
+        "id": uid(), "name": "Format Pickup Preview", "type": "n8n-nodes-base.code",
+        "typeVersion": 2, "position": [1920, 1300],
+    }
+
     # Common send. allow_sending_without_reply lets the message go through even if
     # reply_to_message_id was deleted or doesn't exist (smoke tests, edge cases).
     telegram_reply = {
@@ -878,6 +1202,8 @@ def build():
              linear_fetch, summary_format,
              lookup_issue, build_update, linear_update, update_reply,
              help_format,
+             wms_fetch, packlist_format,
+             fetch_pickup_orders, is_pickup_confirmed, fire_pickup_wa, format_pickup_preview,
              telegram_reply]
 
     connections = {
@@ -894,12 +1220,14 @@ def build():
         build_claude["name"]:   {"main": [[{"node": claude_call["name"],   "type": "main", "index": 0}]]},
         claude_call["name"]:    {"main": [[{"node": parse_intent["name"],  "type": "main", "index": 0}]]},
         parse_intent["name"]:   {"main": [[{"node": switch["name"],        "type": "main", "index": 0}]]},
-        # Switch outputs: 0=create, 1=summary, 2=update, 3=help (fallback → create)
+        # Switch outputs: 0=create, 1=summary, 2=update, 3=help, 4=packlist, 5=send_pickup_wa (fallback → create)
         switch["name"]: {"main": [
-            [{"node": build_mutation["name"], "type": "main", "index": 0}],  # 0: create
-            [{"node": linear_fetch["name"],   "type": "main", "index": 0}],  # 1: summary
-            [{"node": lookup_issue["name"],   "type": "main", "index": 0}],  # 2: update
-            [{"node": help_format["name"],    "type": "main", "index": 0}],  # 3: help
+            [{"node": build_mutation["name"],      "type": "main", "index": 0}],  # 0: create
+            [{"node": linear_fetch["name"],        "type": "main", "index": 0}],  # 1: summary
+            [{"node": lookup_issue["name"],        "type": "main", "index": 0}],  # 2: update
+            [{"node": help_format["name"],         "type": "main", "index": 0}],  # 3: help
+            [{"node": wms_fetch["name"],           "type": "main", "index": 0}],  # 4: packlist
+            [{"node": fetch_pickup_orders["name"], "type": "main", "index": 0}],  # 5: send_pickup_wa
         ]},
         # CREATE
         build_mutation["name"]: {"main": [[{"node": linear_create["name"], "type": "main", "index": 0}]]},
@@ -915,6 +1243,17 @@ def build():
         update_reply["name"]:   {"main": [[{"node": telegram_reply["name"],"type": "main", "index": 0}]]},
         # HELP
         help_format["name"]:    {"main": [[{"node": telegram_reply["name"],"type": "main", "index": 0}]]},
+        # PACKLIST
+        wms_fetch["name"]:       {"main": [[{"node": packlist_format["name"], "type": "main", "index": 0}]]},
+        packlist_format["name"]: {"main": [[{"node": telegram_reply["name"],  "type": "main", "index": 0}]]},
+        # SEND_PICKUP_WA
+        fetch_pickup_orders["name"]:   {"main": [[{"node": is_pickup_confirmed["name"], "type": "main", "index": 0}]]},
+        is_pickup_confirmed["name"]: {"main": [
+            [{"node": fire_pickup_wa["name"],        "type": "main", "index": 0}],  # true  → fire
+            [{"node": format_pickup_preview["name"], "type": "main", "index": 0}],  # false → preview
+        ]},
+        fire_pickup_wa["name"]:        {"main": [[{"node": telegram_reply["name"], "type": "main", "index": 0}]]},
+        format_pickup_preview["name"]: {"main": [[{"node": telegram_reply["name"], "type": "main", "index": 0}]]},
     }
 
     return {
