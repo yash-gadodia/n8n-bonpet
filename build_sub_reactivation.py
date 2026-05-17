@@ -261,12 +261,17 @@ for (const c of contracts.values()) {
     continue;
   }
 
-  // Behavior-based staleness: prefer last paid SUB order; fall back to last any order.
+  // Behavior-based staleness: days since LAST PAID ORDER OF ANY TYPE (sub OR one-off).
+  // A paused/cancelled customer who still buys ala carte is engaged — we don't want
+  // to send them a "we miss you" message when they ordered last week. The cohort
+  // (paused/cancelled) determines WHICH message, but inactivity-of-all-orders
+  // determines WHETHER to send.
+  //
   // Email-first join (customer_id is sparse in orders sheet).
   const orderInfo = (c.email && orderInfoByEmail.get(c.email)) ||
                     (c.customer_id && orderInfoByCust.get(c.customer_id)) ||
                     null;
-  const lastOrderTs = orderInfo ? (orderInfo.last_sub_ts || orderInfo.last_any_ts) : null;
+  const lastOrderTs = orderInfo ? orderInfo.last_any_ts : null;
   if (!lastOrderTs) { stats.skip_no_order_history++; continue; }
   const daysSince = (nowMs - lastOrderTs) / DAY_MS;
   if (daysSince < minDays || daysSince > maxDays) { stats.skip_window++; continue; }
@@ -298,25 +303,47 @@ for (const c of contracts.values()) {
     status_at_send:     status,
     days_since:         Math.round(daysSince),
     last_order_iso:     new Date(lastOrderTs).toISOString(),
-    staleness_basis:    (orderInfo && orderInfo.last_sub_ts === lastOrderTs) ? 'last_sub_order' : 'last_any_order',
+    last_sub_order_iso: (orderInfo && orderInfo.last_sub_ts) ? new Date(orderInfo.last_sub_ts).toISOString() : null,
   };
-  if (cohort === 'paused') {
-    candidatesPaused.push(candidate);
-    stats.candidates_paused++;
-  } else {
-    candidatesCancelled.push(candidate);
-    stats.candidates_cancelled++;
-  }
+  if (cohort === 'paused') candidatesPaused.push(candidate);
+  else                     candidatesCancelled.push(candidate);
 }
 
-// Oldest-first within each cohort (most-stale customers get the touch first).
-candidatesPaused.sort((a, b) => b.days_since - a.days_since);
-candidatesCancelled.sort((a, b) => b.days_since - a.days_since);
+// Dedupe candidates by phone — one outbound per CUSTOMER, not per contract.
+// A customer can have multiple subscription contracts (e.g. one for cat one for dog).
+// Without this, Chan-with-3-paused-contracts would get 3 identical WAs in 50 seconds.
+// Tie-break rules:
+//   - Prefer PAUSED cohort (still partially with us) over CANCELLED
+//   - Within same cohort, keep the candidate with the longest staleness
+const byPhone = new Map();
+function dedupCandidate(c) {
+  const existing = byPhone.get(c.phone);
+  if (!existing) { byPhone.set(c.phone, c); return; }
+  if (existing.cohort === 'cancelled' && c.cohort === 'paused') { byPhone.set(c.phone, c); return; }
+  if (existing.cohort === 'paused'    && c.cohort === 'cancelled') return;
+  if (c.days_since > existing.days_since) byPhone.set(c.phone, c);
+}
+for (const c of candidatesPaused)    dedupCandidate(c);
+for (const c of candidatesCancelled) dedupCandidate(c);
 
-const sendPaused    = candidatesPaused.slice(0, DAILY_CAP_PER_COHORT);
-const sendCancelled = candidatesCancelled.slice(0, DAILY_CAP_PER_COHORT);
-stats.capped_out_paused    = Math.max(0, candidatesPaused.length - sendPaused.length);
-stats.capped_out_cancelled = Math.max(0, candidatesCancelled.length - sendCancelled.length);
+// Re-split into cohorts after dedup, for capping and routing.
+const dedupedPaused = [];
+const dedupedCancelled = [];
+for (const c of byPhone.values()) {
+  if (c.cohort === 'paused') dedupedPaused.push(c);
+  else dedupedCancelled.push(c);
+}
+stats.candidates_paused    = dedupedPaused.length;
+stats.candidates_cancelled = dedupedCancelled.length;
+
+// Oldest-first within each cohort (most-stale customers get the touch first).
+dedupedPaused.sort((a, b) => b.days_since - a.days_since);
+dedupedCancelled.sort((a, b) => b.days_since - a.days_since);
+
+const sendPaused    = dedupedPaused.slice(0, DAILY_CAP_PER_COHORT);
+const sendCancelled = dedupedCancelled.slice(0, DAILY_CAP_PER_COHORT);
+stats.capped_out_paused    = Math.max(0, dedupedPaused.length - sendPaused.length);
+stats.capped_out_cancelled = Math.max(0, dedupedCancelled.length - sendCancelled.length);
 stats.sending_paused    = sendPaused.length;
 stats.sending_cancelled = sendCancelled.length;
 
@@ -362,7 +389,7 @@ const modeTag = DRY_RUN ? '🧪 DRY RUN' : '📬 LIVE';
 const samplePaused    = sendPaused[0];
 const sampleCancelled = sendCancelled[0];
 const sampleBlock = (s, label) => s
-  ? `\n*Sample ${label}* → ${redact(s.first_name)} (${s.phone.slice(0,4)}***, ${s.days_since}d since last ${s.staleness_basis === 'last_sub_order' ? 'sub order' : 'order'}):\n${(s.cohort === 'paused' ? PAUSED_TEMPLATE : CANCELLED_TEMPLATE).replace(/\{first_name\}/g, redact(s.first_name)).slice(0, 400)}…`
+  ? `\n*Sample ${label}* → ${redact(s.first_name)} (${s.phone.slice(0,4)}***, ${s.days_since}d since last order of any type):\n${(s.cohort === 'paused' ? PAUSED_TEMPLATE : CANCELLED_TEMPLATE).replace(/\{first_name\}/g, redact(s.first_name)).slice(0, 400)}…`
   : `\n*No ${label} candidates today.*`;
 
 const headerMsg = `🔁 *Sub Reactivation — ${modeTag}*\n📅 ${new Date().toISOString().slice(0,10)}\n\n` +
@@ -370,7 +397,7 @@ const headerMsg = `🔁 *Sub Reactivation — ${modeTag}*\n📅 ${new Date().toI
   `   • Paused-stale: ${stats.sending_paused} (cap ${DAILY_CAP_PER_COHORT})\n` +
   `   • Cancelled-stale: ${stats.sending_cancelled} (cap ${DAILY_CAP_PER_COHORT})\n` +
   `   • Capped: ${stats.capped_out_paused + stats.capped_out_cancelled} (waiting)\n\n` +
-  `📊 *Funnel* (staleness = days since last paid sub order)\n` +
+  `📊 *Funnel* (staleness = days since last paid order, sub OR one-off)\n` +
   `• Contracts scanned: ${stats.contracts_total}\n` +
   `• Eligible paused (pre-cap): ${stats.candidates_paused}\n` +
   `• Eligible cancelled (pre-cap): ${stats.candidates_cancelled}\n` +
