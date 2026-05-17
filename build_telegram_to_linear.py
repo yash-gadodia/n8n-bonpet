@@ -210,6 +210,10 @@ Schema:
   "filter": { "category": "...", "stale": true, "assignee": "first name or email", "unassigned": true },
   // For "packlist" — optional filter:
   "pack_filter": { "self_collect_only": true | false },
+  // For "send_pickup_wa" — OPTIONAL: list of specific order numbers (as integers, NO # prefix).
+  // OMIT or set to null if user wants ALL unfulfilled self-collect orders.
+  // Include ONLY if user explicitly names order numbers.
+  "order_numbers": [3299, 3300],
   // For "update" — required identifier + at least one field in updates:
   "identifier": "TBP-23",
   "updates": {
@@ -228,6 +232,16 @@ Routing:
    - "let customers know their orders are ready", "tell customers to pick up"
    - "orders are packed, fire wa", "all packed send wa", "fire it", "send it for all pending pickup"
    - This is the DEFAULT meaning of "send wa notif" / "fire wa" in this chat — there is no other generic-WA broadcast intent exposed here. If a user says anything like "send wa notif" / "fire wa" / similar, this is the intent.
+   - **order_numbers extraction:** If the user names specific order numbers (e.g. "#3299", "3300"), populate "order_numbers" with those as integers (no # prefix). The fire branch will filter the WMS list to just those orders.
+       - "send pickup ready to #3299 and #3300"      → order_numbers: [3299, 3300]
+       - "fire wa to 3298, 3300, 3302"               → order_numbers: [3298, 3300, 3302]
+       - "let #3298 know it's ready for pickup"      → order_numbers: [3298]
+       - "send pickup ready to 3299"                 → order_numbers: [3299]
+       - "send self-collection ready to #3298 only"  → order_numbers: [3298]
+     If user does NOT name specific order numbers (just "all customers", "everyone", "fire wa notif"), OMIT order_numbers or set to null — fires ALL unfulfilled self-collect.
+       - "fire wa notif for all self collection"     → omit order_numbers
+       - "send wa notif"                             → omit order_numbers
+       - "let all customers know"                    → omit order_numbers
    - Do NOT use this for: SINGLE-order pickup-ready tags ("order #3293 ready for self collection") — those are handled before Claude sees the message.
 - "packlist" when user is asking about PHYSICAL ORDERS that need to be PACKED / SHIPPED / FULFILLED (NOT Linear tickets). These hit the live OMS, not Linear. Triggers:
    - "what do I need to pack?", "what's left to pack?", "show me the packlist", "pack list"
@@ -743,20 +757,45 @@ return [{ json: {
 } }];
 """
 
-FIRE_PICKUP_WA_JS = r"""// Sequentially POST to the pickup-ready webhook for each unfulfilled self-collect order
+FIRE_PICKUP_WA_JS = r"""// Sequentially POST to the pickup-ready webhook for each unfulfilled self-collect order.
+// If parsed.order_numbers is set, filter the WMS list to just those orders.
 const ctx = $('Parse Intent').first().json._ctx;
+const parsed = $('Parse Intent').first().json.parsed || {};
 const resp = $input.first().json;
-const orders = (resp && resp.orders) || [];
+let orders = (resp && resp.orders) || [];
 const PICKUP_URL = 'https://n8n.thebonpet.com/webhook/selfcollect-pickup-ready-3f9c1a';
 const DELAY_MS = 8000;
 
-if (orders.length === 0) {
-  return [{ json: {
-    chat_id: ctx.chat_id,
-    message_thread_id: ctx.message_thread_id,
-    reply_to_message_id: ctx.reply_to_message_id,
+// Filter by explicit order_numbers if provided
+const wantedNums = Array.isArray(parsed.order_numbers)
+  ? parsed.order_numbers.map(n => String(n).replace(/^#/, '').trim()).filter(Boolean)
+  : [];
+let unmatched = [];
+if (wantedNums.length > 0) {
+  const wantedSet = new Set(wantedNums);
+  const found = orders.filter(o => wantedSet.has(String(o.order_name || '').replace(/^#/, '').trim()));
+  const foundSet = new Set(found.map(o => String(o.order_name || '').replace(/^#/, '').trim()));
+  unmatched = wantedNums.filter(n => !foundSet.has(n));
+  orders = found;
+}
+
+const baseReply = {
+  chat_id: ctx.chat_id,
+  message_thread_id: ctx.message_thread_id,
+  reply_to_message_id: ctx.reply_to_message_id,
+};
+
+if (orders.length === 0 && unmatched.length === 0) {
+  return [{ json: { ...baseReply,
     text: '🎉 No unfulfilled self-collect orders — nothing to send.',
   } }];
+}
+if (orders.length === 0 && unmatched.length > 0) {
+  const lines = ['⚠️ *None of those orders are in the unfulfilled self-collect list:*'];
+  for (const n of unmatched) lines.push(`  ❌ #${n}`);
+  lines.push('');
+  lines.push('_(Already fulfilled, not self-collect, or wrong number? Check OMS.)_');
+  return [{ json: { ...baseReply, text: lines.join('\n') } }];
 }
 
 const results = [];
@@ -802,15 +841,15 @@ for (const r of results) {
   const detail = r.ok ? '' : ` · ${r.status}${r.error ? ' ' + r.error : ''}`;
   lines.push(`  ${icon} \`${r.order}\`${detail}`);
 }
+if (unmatched.length > 0) {
+  lines.push('');
+  lines.push(`_Not in unfulfilled self-collect list (skipped):_`);
+  for (const n of unmatched) lines.push(`  ⚠️ #${n}`);
+}
 lines.push('');
 lines.push('_WA + OMS + Shopify auto-synced per order (see per-order replies above)._');
 
-return [{ json: {
-  chat_id: ctx.chat_id,
-  message_thread_id: ctx.message_thread_id,
-  reply_to_message_id: ctx.reply_to_message_id,
-  text: lines.join('\n'),
-} }];
+return [{ json: { ...baseReply, text: lines.join('\n') } }];
 """
 
 
@@ -834,9 +873,10 @@ const text = `🤖 *@weslee_bot — what I can do*
   • _@weslee which self-collection orders are open?_
   • _@weslee show the packlist_
 
-📲 *Send pickup-ready WAs* (auto-fulfills OMS, 2-step confirm):
-  • _@weslee send wa notif_ → shows DRY preview
-  • _@weslee confirm pickup wa_ → fires for all unfulfilled self-collect orders
+📲 *Send pickup-ready WAs* (fires immediately, WA + OMS + Shopify auto-sync):
+  • _@weslee send wa notif_ → fires for ALL unfulfilled self-collect orders
+  • _@weslee send pickup ready to #3299 and #3300_ → fires only those
+  • _@weslee fire wa to 3298, 3300, 3302_ → fires only those
 
 🛠️ *Update a ticket* (state/assignee/priority/category):
   • _@weslee mark TBP-23 done_
