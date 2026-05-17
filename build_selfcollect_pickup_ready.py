@@ -35,6 +35,11 @@ WA_KEY = subprocess.check_output(
 TELEGRAM_TOKEN = subprocess.check_output(
     ["security", "find-generic-password", "-a", "thebonpet", "-s", "telegram-weslee-bot", "-w"]
 ).decode().strip()
+SHOPIFY_TOKEN = subprocess.check_output(
+    ["security", "find-generic-password", "-a", "yash-claude", "-s", "shopify-bonpet-admin-token", "-w"]
+).decode().strip()
+SHOPIFY_SHOP = "d2ac44-d5.myshopify.com"
+SHOPIFY_API_VERSION = "2024-10"
 
 ERROR_ALERTER_ID = "c3Vk2nt9WINzp9GH"
 PICKUP_ADDRESS = "5 Siglap Road #17-38 Lobby K, Singapore 448908"
@@ -171,7 +176,7 @@ if (ctx.extra_note) {
 lines.push(
   '',
   `Any questions, just reply here. Thanks so much for choosing us 💛`,
-  `<3 The Bon Pet team`,
+  `❤️ The Bon Pet team`,
 );
 
 return [{
@@ -220,15 +225,87 @@ return [{ json: {
 }}];
 """
 
+# Shopify fulfill — GraphQL lookup + fulfillmentCreateV2. onError=continueRegularOutput
+# so a Shopify failure does NOT block the WA success reply.
+SHOPIFY_FULFILL_JS = r"""const orderName = $('Match Order').first().json.order.order_name;  // "#3298"
+const URL = `https://__SHOP__/admin/api/__API_VERSION__/graphql.json`;
+const TOKEN = '__SHOPIFY_TOKEN__';
+
+async function gql(query, variables) {
+  return await this.helpers.httpRequest({
+    method: 'POST',
+    url: URL,
+    headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' },
+    body: { query, variables },
+    json: true,
+  });
+}
+
+let shopify_status = 'unknown';
+let shopify_detail = '';
+
+try {
+  const lookupQ = `query($q: String!) { orders(first: 1, query: $q) { nodes { id name displayFulfillmentStatus fulfillmentOrders(first: 10) { nodes { id status } } } } }`;
+  const lookup = await gql(lookupQ, { q: `name:${orderName}` });
+  const order = lookup && lookup.data && lookup.data.orders && lookup.data.orders.nodes && lookup.data.orders.nodes[0];
+  if (!order) {
+    shopify_status = 'not_found';
+  } else if (order.displayFulfillmentStatus === 'FULFILLED') {
+    shopify_status = 'already_fulfilled';
+  } else {
+    const openFOs = ((order.fulfillmentOrders && order.fulfillmentOrders.nodes) || [])
+      .filter(f => f.status === 'OPEN' || f.status === 'IN_PROGRESS');
+    if (openFOs.length === 0) {
+      shopify_status = 'no_open_fo';
+      shopify_detail = `displayStatus=${order.displayFulfillmentStatus}`;
+    } else {
+      const fulfillM = `mutation($input: FulfillmentV2Input!) { fulfillmentCreateV2(fulfillment: $input) { fulfillment { id status } userErrors { field message } } }`;
+      const ff = await gql(fulfillM, {
+        input: {
+          lineItemsByFulfillmentOrder: openFOs.map(f => ({ fulfillmentOrderId: f.id })),
+          notifyCustomer: false,
+        }
+      });
+      const result = ff && ff.data && ff.data.fulfillmentCreateV2;
+      const errors = (result && result.userErrors) || [];
+      if (errors.length > 0) {
+        shopify_status = 'error';
+        shopify_detail = errors.map(e => e.message).join('; ').slice(0, 200);
+      } else {
+        shopify_status = (result && result.fulfillment && result.fulfillment.status) || 'fulfilled';
+      }
+    }
+  }
+} catch (e) {
+  shopify_status = 'exception';
+  shopify_detail = String((e && e.message) || e).slice(0, 200);
+}
+
+return [{ json: { shopify_status, shopify_detail } }];
+""".replace("__SHOP__", SHOPIFY_SHOP).replace("__API_VERSION__", SHOPIFY_API_VERSION).replace("__SHOPIFY_TOKEN__", SHOPIFY_TOKEN)
+
+
 # After Mark Fulfilled HTTP, pull chat_id from Parse Input (not from HTTP response).
 # Per feedback_n8n_http_input_passthrough.md.
 BUILD_SUCCESS_JS = r"""const ctx = $('Parse Input').first().json;
 const o = $('Match Order').first().json.order;
-const fulfilled = $input.first().json;
+const fulfilled = $('Mark Fulfilled').first().json;
+const shopify = $input.first().json;
 const trackingNote = fulfilled.tracking_id ? ` (tracking ${fulfilled.tracking_id})` : '';
+
+let shopifyLine;
+const s = shopify.shopify_status;
+if (s === 'SUCCESS' || s === 'fulfilled' || s === 'OPEN' || s === 'IN_PROGRESS') shopifyLine = '✅ Shopify: fulfilled';
+else if (s === 'already_fulfilled') shopifyLine = 'ℹ️ Shopify: already fulfilled';
+else if (s === 'not_found') shopifyLine = '⚠️ Shopify: order not found';
+else if (s === 'no_open_fo') shopifyLine = `⚠️ Shopify: no open fulfillment orders (${shopify.shopify_detail || ''})`;
+else if (s === 'error' || s === 'exception') shopifyLine = `❌ Shopify: ${shopify.shopify_detail || 'unknown error'}`;
+else shopifyLine = `⚠️ Shopify: ${s || 'unknown'}`;
+
 const text = [
   `✅ Sent pickup-ready WA to *${o.first_name} ${o.last_name}* at ${o.phone}`,
-  `Order ${o.order_name} auto-fulfilled${trackingNote}.`,
+  `Order ${o.order_name} auto-fulfilled in OMS${trackingNote}.`,
+  shopifyLine,
   ``,
   `Triggered by ${ctx.sender_name}.`,
 ].join('\n');
@@ -411,12 +488,22 @@ def mark_fulfilled_node():
     }
 
 
+def shopify_fulfill_node():
+    return {
+        "parameters": {"jsCode": SHOPIFY_FULFILL_JS},
+        "id": uid(), "name": "Shopify Fulfill",
+        "type": "n8n-nodes-base.code", "typeVersion": 2,
+        "position": [1920, 200],
+        "onError": "continueRegularOutput",
+    }
+
+
 def build_success_node():
     return {
         "parameters": {"jsCode": BUILD_SUCCESS_JS},
         "id": uid(), "name": "Build Success Reply",
         "type": "n8n-nodes-base.code", "typeVersion": 2,
-        "position": [1920, 200],
+        "position": [2160, 200],
     }
 
 
@@ -467,6 +554,7 @@ def build_workflow():
     build_wa = build_wa_msg_node()
     send_wa = send_wa_node()
     mark_ff = mark_fulfilled_node()
+    shopify_ff = shopify_fulfill_node()
     build_success = build_success_node()
 
     # Error paths
@@ -477,7 +565,7 @@ def build_workflow():
 
     nodes = [
         webhook, parse, fetch, match, switch,
-        build_wa, send_wa, mark_ff, build_success,
+        build_wa, send_wa, mark_ff, shopify_ff, build_success,
         build_no_match, build_multi,
         telegram_reply,
     ]
@@ -495,7 +583,8 @@ def build_workflow():
         ]},
         build_wa["name"]:       {"main": [[{"node": send_wa["name"],       "type": "main", "index": 0}]]},
         send_wa["name"]:        {"main": [[{"node": mark_ff["name"],       "type": "main", "index": 0}]]},
-        mark_ff["name"]:        {"main": [[{"node": build_success["name"], "type": "main", "index": 0}]]},
+        mark_ff["name"]:        {"main": [[{"node": shopify_ff["name"],    "type": "main", "index": 0}]]},
+        shopify_ff["name"]:     {"main": [[{"node": build_success["name"], "type": "main", "index": 0}]]},
         build_success["name"]:  {"main": [[{"node": telegram_reply["name"],"type": "main", "index": 0}]]},
         build_no_match["name"]: {"main": [[{"node": telegram_reply["name"],"type": "main", "index": 0}]]},
         build_multi["name"]:    {"main": [[{"node": telegram_reply["name"],"type": "main", "index": 0}]]},
