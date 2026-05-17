@@ -210,8 +210,6 @@ Schema:
   "filter": { "category": "...", "stale": true, "assignee": "first name or email", "unassigned": true },
   // For "packlist" — optional filter:
   "pack_filter": { "self_collect_only": true | false },
-  // For "send_pickup_wa" — required confirmation flag:
-  "confirmed": true | false,
   // For "update" — required identifier + at least one field in updates:
   "identifier": "TBP-23",
   "updates": {
@@ -223,17 +221,13 @@ Schema:
 }
 
 Routing:
-- "send_pickup_wa" when user wants to SEND THE PICKUP-READY WHATSAPP TEMPLATE to customers whose self-collect orders are packed/ready. This fans out the WA + auto-fulfills OMS for ALL unfulfilled self-collect orders. Triggers:
+- "send_pickup_wa" when user wants to SEND THE PICKUP-READY WHATSAPP TEMPLATE to customers whose self-collect orders are packed/ready. This fans out the WA + auto-fulfills OMS for ALL unfulfilled self-collect orders — fires IMMEDIATELY, no confirm step. Triggers:
    - "fire wa notif", "send wa notif", "send the wa notif", "fire the wa"
-   - "send whatsapp notification for all self collection orders"
+   - "fire whatsapp notif for pickup ready", "send whatsapp notification for all self collection orders"
    - "send pickup ready WAs", "blast pickup ready", "fire pickup ready notifs"
    - "let customers know their orders are ready", "tell customers to pick up"
-   - "orders are packed, fire wa", "all packed send wa"
-   - This is the DEFAULT meaning of "send wa notif" in this chat — there is no other generic-WA broadcast intent exposed here. If a user says "send wa notif" without further specifics, this is the intent.
-   - Set "confirmed": true ONLY if the message contains an explicit confirmation phrase:
-       "confirm pickup wa", "yes send pickup wa", "fire pickup wa now",
-       "blast pickup wa", "send it now", "go ahead fire wa", "yes fire wa"
-     Otherwise set "confirmed": false (will trigger a DRY preview reply).
+   - "orders are packed, fire wa", "all packed send wa", "fire it", "send it for all pending pickup"
+   - This is the DEFAULT meaning of "send wa notif" / "fire wa" in this chat — there is no other generic-WA broadcast intent exposed here. If a user says anything like "send wa notif" / "fire wa" / similar, this is the intent.
    - Do NOT use this for: SINGLE-order pickup-ready tags ("order #3293 ready for self collection") — those are handled before Claude sees the message.
 - "packlist" when user is asking about PHYSICAL ORDERS that need to be PACKED / SHIPPED / FULFILLED (NOT Linear tickets). These hit the live OMS, not Linear. Triggers:
    - "what do I need to pack?", "what's left to pack?", "show me the packlist", "pack list"
@@ -775,17 +769,22 @@ for (let i = 0; i < orders.length; i++) {
     continue;
   }
   try {
-    const r = await fetch(PICKUP_URL, {
+    const r = await this.helpers.httpRequest({
       method: 'POST',
+      url: PICKUP_URL,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: {
         order_number: orderNum,
         sender_name: `Bulk via Telegram (${ctx.sender_name || 'unknown'})`,
-      }),
+      },
+      json: true,
+      returnFullResponse: true,
     });
-    results.push({ order: o.order_name, ok: r.status < 300, status: r.status });
+    const status = r.statusCode || r.status || 0;
+    results.push({ order: o.order_name, ok: status >= 200 && status < 300, status });
   } catch (e) {
-    results.push({ order: o.order_name, ok: false, status: 0, error: String(e).slice(0, 100) });
+    const status = (e && (e.statusCode || e.status)) || 0;
+    results.push({ order: o.order_name, ok: false, status, error: String(e.message || e).slice(0, 200) });
   }
   if (i < orders.length - 1) {
     await new Promise(res => setTimeout(res, DELAY_MS));
@@ -804,7 +803,7 @@ for (const r of results) {
   lines.push(`  ${icon} \`${r.order}\`${detail}`);
 }
 lines.push('');
-lines.push('_OMS auto-fulfilled. Shopify NOT updated (read-only rule)._');
+lines.push('_WA + OMS + Shopify auto-synced per order (see per-order replies above)._');
 
 return [{ json: {
   chat_id: ctx.chat_id,
@@ -1123,7 +1122,7 @@ def build():
         "typeVersion": 2, "position": [1680, 1000],
     }
 
-    # SEND_PICKUP_WA branch — fetch self-collect unfulfilled, branch on confirmed flag
+    # SEND_PICKUP_WA branch — fetch self-collect unfulfilled, fire immediately (no confirm gate)
     fetch_pickup_orders = {
         "parameters": {
             "method": "GET",
@@ -1144,32 +1143,10 @@ def build():
         "id": uid(), "name": "Fetch Pickup Orders", "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.2, "position": [1440, 1200],
     }
-    is_pickup_confirmed = {
-        "parameters": {
-            "conditions": {
-                "options": {"caseSensitive": True, "leftValue": "", "typeValidation": "strict"},
-                "conditions": [{
-                    "id": uid(),
-                    "leftValue": "={{ $('Parse Intent').first().json.parsed.confirmed }}",
-                    "rightValue": "true",
-                    "operator": {"type": "boolean", "operation": "true", "singleValue": True},
-                }],
-                "combinator": "and",
-            },
-            "options": {},
-        },
-        "id": uid(), "name": "Is Pickup Confirmed", "type": "n8n-nodes-base.if",
-        "typeVersion": 2, "position": [1680, 1200],
-    }
     fire_pickup_wa = {
         "parameters": {"jsCode": FIRE_PICKUP_WA_JS},
         "id": uid(), "name": "Fire Pickup WAs", "type": "n8n-nodes-base.code",
-        "typeVersion": 2, "position": [1920, 1100],
-    }
-    format_pickup_preview = {
-        "parameters": {"jsCode": PICKUP_WA_PREVIEW_JS},
-        "id": uid(), "name": "Format Pickup Preview", "type": "n8n-nodes-base.code",
-        "typeVersion": 2, "position": [1920, 1300],
+        "typeVersion": 2, "position": [1680, 1200],
     }
 
     # Common send. allow_sending_without_reply lets the message go through even if
@@ -1203,7 +1180,7 @@ def build():
              lookup_issue, build_update, linear_update, update_reply,
              help_format,
              wms_fetch, packlist_format,
-             fetch_pickup_orders, is_pickup_confirmed, fire_pickup_wa, format_pickup_preview,
+             fetch_pickup_orders, fire_pickup_wa,
              telegram_reply]
 
     connections = {
@@ -1246,14 +1223,9 @@ def build():
         # PACKLIST
         wms_fetch["name"]:       {"main": [[{"node": packlist_format["name"], "type": "main", "index": 0}]]},
         packlist_format["name"]: {"main": [[{"node": telegram_reply["name"],  "type": "main", "index": 0}]]},
-        # SEND_PICKUP_WA
-        fetch_pickup_orders["name"]:   {"main": [[{"node": is_pickup_confirmed["name"], "type": "main", "index": 0}]]},
-        is_pickup_confirmed["name"]: {"main": [
-            [{"node": fire_pickup_wa["name"],        "type": "main", "index": 0}],  # true  → fire
-            [{"node": format_pickup_preview["name"], "type": "main", "index": 0}],  # false → preview
-        ]},
-        fire_pickup_wa["name"]:        {"main": [[{"node": telegram_reply["name"], "type": "main", "index": 0}]]},
-        format_pickup_preview["name"]: {"main": [[{"node": telegram_reply["name"], "type": "main", "index": 0}]]},
+        # SEND_PICKUP_WA — fire immediately, no confirm gate
+        fetch_pickup_orders["name"]: {"main": [[{"node": fire_pickup_wa["name"],  "type": "main", "index": 0}]]},
+        fire_pickup_wa["name"]:      {"main": [[{"node": telegram_reply["name"], "type": "main", "index": 0}]]},
     }
 
     return {
