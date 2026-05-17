@@ -630,10 +630,11 @@ def append_react_sent_node():
 
 
 def build():
-    # Daily 10:13 AM SGT (staggered off HH:00 per cron-stagger memory).
+    # Daily 6:07 PM SGT (Yash chose 6pm; +7min stagger off HH:00 per cron-stagger memory,
+    # and off Reorder Reminder's 18:00 to avoid clustering).
     schedule = {
-        "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": "13 10 * * *"}]}},
-        "id": uid(), "name": "Daily 10:13 SGT",
+        "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": "7 18 * * *"}]}},
+        "id": uid(), "name": "Daily 18:07 SGT",
         "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2,
         "position": [0, 200],
     }
