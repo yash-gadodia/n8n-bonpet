@@ -155,8 +155,12 @@ function progressBar(pct, width) {
 }
 function pctOf(rev, target) { return target > 0 ? Math.round((rev / target) * 100) : 0; }
 function isSubOrder(o) {
-  const codes = Array.isArray(o.discount_codes) ? o.discount_codes : [];
-  return codes.some(d => /^subscription/i.test(d && d.code || ''));
+  // Shopify REST API exposes subscription marker via tags + source_name (not discount_codes;
+  // those only carry the synthetic 'Subscription' code in webhook payloads).
+  const tags = String(o.tags || '');
+  if (/(^|,)\s*Subscription(\s|,|$)/i.test(tags)) return true;
+  if (String(o.source_name || '').startsWith('subscription_contract')) return true;
+  return false;
 }
 
 // Buckets
@@ -499,7 +503,7 @@ def build():
         "=" + base + "/orders.json?status=any&financial_status=paid"
         "&created_at_min={{ $json.fetch_start }}"
         "&created_at_max={{ $json.fetch_end }}"
-        "&limit=250&fields=id,total_price,created_at,customer,financial_status,cancelled_at,discount_codes"
+        "&limit=250&fields=id,total_price,created_at,customer,financial_status,cancelled_at,tags,source_name"
     )
     fetch_open = shopify_node(
         "Fetch Open Orders", [480, 400],
