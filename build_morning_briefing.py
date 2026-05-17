@@ -7,7 +7,7 @@ import urllib.request
 import urllib.error
 
 from _notify import telegram_send_node
-from _sent_log import read_global_sent_log_node
+from _sent_log import read_global_sent_log_node, filter_recent_sent_log_node
 import subprocess
 
 API = "https://n8n.thebonpet.com/api/v1"
@@ -38,8 +38,9 @@ TARGET_PRIMARY = 8500
 TARGET_STRETCH = 11000
 
 DATE_RANGES_JS = r"""// Compute SGT boundaries covering:
-// - yesterday / prev-day / prev-week-same-day (for Daily Pulse section)
-// - month-to-date (for Goal Tracking section)
+// - yesterday (slim daily snapshot)
+// - last 7d vs prior 7d (rolling trend)
+// - month-to-date vs prior month same window (apples-to-apples MoM)
 const now = new Date();
 const SGT_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY = 24 * 60 * 60 * 1000;
@@ -53,16 +54,25 @@ const sgtMidnightToday = Date.UTC(ySgt, mSgt, dSgt) - SGT_OFFSET_MS;
 const monthStart       = Date.UTC(ySgt, mSgt, 1) - SGT_OFFSET_MS;
 const monthEnd         = Date.UTC(ySgt, mSgt + 1, 1) - SGT_OFFSET_MS;
 
-const yesterdayStart  = new Date(sgtMidnightToday - DAY);
-const yesterdayEnd    = new Date(sgtMidnightToday);
-const prevDayStart    = new Date(sgtMidnightToday - 2 * DAY);
-const prevDayEnd      = yesterdayStart;
-const prevWeekStart   = new Date(sgtMidnightToday - 8 * DAY);
-const prevWeekEnd     = new Date(sgtMidnightToday - 7 * DAY);
-const openOrderCutoff = new Date(now.getTime() - DAY);
+const priorMonthY = mSgt === 0 ? ySgt - 1 : ySgt;
+const priorMonthM = mSgt === 0 ? 11 : mSgt - 1;
+const priorMonthStart = Date.UTC(priorMonthY, priorMonthM, 1) - SGT_OFFSET_MS;
+const priorMonthEnd   = monthStart;
 
-// Fetch window: from the earlier of (month_start, prev_week_start) up to now
-const fetchStart = Math.min(monthStart, prevWeekStart.getTime());
+// Prior-month window matches how much of current month has elapsed
+const elapsedMs = now.getTime() - monthStart;
+const priorMonthWindowEnd = Math.min(priorMonthStart + elapsedMs, priorMonthEnd);
+
+const yesterdayStart  = sgtMidnightToday - DAY;
+const yesterdayEnd    = sgtMidnightToday;
+const last7Start      = sgtMidnightToday - 7 * DAY;
+const last7End        = sgtMidnightToday;
+const prior7Start     = sgtMidnightToday - 14 * DAY;
+const prior7End       = sgtMidnightToday - 7 * DAY;
+const openOrderCutoff = now.getTime() - DAY;
+
+// Fetch window: from priorMonthStart up to now (covers everything we need)
+const fetchStart = priorMonthStart;
 const fetchEnd   = now.getTime();
 
 const daysInMonth   = Math.round((monthEnd - monthStart) / DAY);
@@ -73,34 +83,35 @@ const dateFmt = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Asia/Singapore',
   weekday: 'short', day: '2-digit', month: 'short', year: 'numeric'
 });
-const wdFmt   = new Intl.DateTimeFormat('en-US', {timeZone: 'Asia/Singapore', weekday: 'short'});
 const monthFmt = new Intl.DateTimeFormat('en-US', {timeZone: 'Asia/Singapore', month: 'long', year: 'numeric'});
+const priorMonthFmt = new Intl.DateTimeFormat('en-US', {timeZone: 'Asia/Singapore', month: 'short', year: 'numeric'});
 
 return [{
   json: {
-    yesterday_start:   yesterdayStart.toISOString(),
-    yesterday_end:     yesterdayEnd.toISOString(),
-    prev_day_start:    prevDayStart.toISOString(),
-    prev_day_end:      prevDayEnd.toISOString(),
-    prev_week_start:   prevWeekStart.toISOString(),
-    prev_week_end:     prevWeekEnd.toISOString(),
-    month_start:       new Date(monthStart).toISOString(),
-    month_end:         new Date(monthEnd).toISOString(),
-    open_order_cutoff: openOrderCutoff.toISOString(),
-    fetch_start:       new Date(fetchStart).toISOString(),
-    fetch_end:         new Date(fetchEnd).toISOString(),
-    formatted_date:    dateFmt.format(yesterdayStart),
-    prev_day_label:    wdFmt.format(prevDayStart),
-    prev_week_label:   wdFmt.format(yesterdayStart),
-    month_label:       monthFmt.format(new Date(monthStart + SGT_OFFSET_MS)),
-    days_in_month:     daysInMonth,
-    days_elapsed:      daysElapsed,
-    days_remaining:    daysRemaining,
+    yesterday_start:        new Date(yesterdayStart).toISOString(),
+    yesterday_end:          new Date(yesterdayEnd).toISOString(),
+    last7_start:            new Date(last7Start).toISOString(),
+    last7_end:              new Date(last7End).toISOString(),
+    prior7_start:           new Date(prior7Start).toISOString(),
+    prior7_end:             new Date(prior7End).toISOString(),
+    month_start:            new Date(monthStart).toISOString(),
+    month_end:              new Date(monthEnd).toISOString(),
+    prior_month_start:      new Date(priorMonthStart).toISOString(),
+    prior_month_window_end: new Date(priorMonthWindowEnd).toISOString(),
+    open_order_cutoff:      new Date(openOrderCutoff).toISOString(),
+    fetch_start:            new Date(fetchStart).toISOString(),
+    fetch_end:              new Date(fetchEnd).toISOString(),
+    formatted_date:         dateFmt.format(new Date(yesterdayStart)),
+    month_label:            monthFmt.format(new Date(monthStart + SGT_OFFSET_MS)),
+    prior_month_label:      priorMonthFmt.format(new Date(priorMonthStart + SGT_OFFSET_MS)),
+    days_in_month:          daysInMonth,
+    days_elapsed:           daysElapsed,
+    days_remaining:         daysRemaining,
   }
 }];
 """
 
-AGGREGATE_JS = r"""// Build combined Morning Briefing: yesterday snapshot + MTD progress
+AGGREGATE_JS = r"""// Morning Briefing v2: target tracking + rolling trends + month-over-month + auto gap diagnosis.
 const ranges = $('Set Date Ranges').first().json;
 
 const TARGET_FLOOR   = __FLOOR__;
@@ -119,15 +130,17 @@ const refundOrders = extractOrders('Fetch Refunds');
 
 const yStart  = new Date(ranges.yesterday_start).getTime();
 const yEnd    = new Date(ranges.yesterday_end).getTime();
-const pdStart = new Date(ranges.prev_day_start).getTime();
-const pdEnd   = new Date(ranges.prev_day_end).getTime();
-const pwStart = new Date(ranges.prev_week_start).getTime();
-const pwEnd   = new Date(ranges.prev_week_end).getTime();
+const l7Start = new Date(ranges.last7_start).getTime();
+const l7End   = new Date(ranges.last7_end).getTime();
+const p7Start = new Date(ranges.prior7_start).getTime();
+const p7End   = new Date(ranges.prior7_end).getTime();
 const mStart  = new Date(ranges.month_start).getTime();
+const pmStart = new Date(ranges.prior_month_start).getTime();
+const pmEnd   = new Date(ranges.prior_month_window_end).getTime();
 const now     = new Date().getTime();
 
 function fmtSGD2(n) { return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
-function fmtSGD0(n) { return n.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0}); }
+function fmtSGD0(n) { return Math.round(n).toLocaleString('en-US'); }
 function fmtK(n) {
   if (n >= 1000) {
     const k = n / 1000;
@@ -135,43 +148,62 @@ function fmtK(n) {
   }
   return String(n);
 }
-function pctStr(curr, prior) {
-  if (!prior || prior === 0) return { text: '—', emoji: '' };
-  const p = Math.round(((curr - prior) / prior) * 100);
-  const sign = p > 0 ? '+' : (p === 0 ? '' : '');
-  const emoji = p > 0 ? '📈' : (p < 0 ? '📉' : '➡️');
-  return { text: `${sign}${p}%`, emoji };
-}
 function progressBar(pct, width) {
   const capped = Math.max(0, Math.min(100, pct));
   const filled = Math.round((capped / 100) * width);
   return '█'.repeat(filled) + '░'.repeat(width - filled);
 }
 function pctOf(rev, target) { return target > 0 ? Math.round((rev / target) * 100) : 0; }
+function isSubOrder(o) {
+  const codes = Array.isArray(o.discount_codes) ? o.discount_codes : [];
+  return codes.some(d => /^subscription/i.test(d && d.code || ''));
+}
 
-// --- Daily Pulse section ---
-let revY = 0, cntY = 0, revPD = 0, cntPD = 0, revPW = 0, cntPW = 0, newCust = 0;
-let revMTD = 0, cntMTD = 0;
+// Buckets
+const newBucket = () => ({ rev: 0, count: 0, subs: 0 });
+const yest   = newBucket();
+const last7  = newBucket();
+const prior7 = newBucket();
+const mtd    = newBucket();
+const priorM = newBucket();
+
+// New-customer acquisitions (by customer.created_at falling in window, deduped)
+const seenCust = new Set();
+const newCustIds = { yest: new Set(), last7: new Set(), prior7: new Set(), mtd: new Set(), priorM: new Set() };
+
+function tally(bucket, t, start, end, total, sub) {
+  if (t >= start && t < end) {
+    bucket.rev += total; bucket.count++; if (sub) bucket.subs++;
+  }
+}
 
 for (const o of orders) {
   if (o.financial_status !== 'paid' && o.financial_status !== 'partially_refunded') continue;
   if (o.cancelled_at) continue;
   const t = new Date(o.created_at).getTime();
   const total = parseFloat(o.total_price || '0');
+  const sub = isSubOrder(o);
 
-  if (t >= yStart && t < yEnd) {
-    revY += total; cntY++;
-    if (o.customer && Number(o.customer.orders_count) === 1) newCust++;
-  } else if (t >= pdStart && t < pdEnd) {
-    revPD += total; cntPD++;
-  } else if (t >= pwStart && t < pwEnd) {
-    revPW += total; cntPW++;
-  }
+  tally(yest,   t, yStart, yEnd,   total, sub);
+  tally(last7,  t, l7Start, l7End, total, sub);
+  tally(prior7, t, p7Start, p7End, total, sub);
+  tally(mtd,    t, mStart, now,    total, sub);
+  tally(priorM, t, pmStart, pmEnd, total, sub);
 
-  if (t >= mStart && t <= now) {
-    revMTD += total; cntMTD++;
+  if (o.customer && o.customer.id && !seenCust.has(o.customer.id)) {
+    seenCust.add(o.customer.id);
+    const ca = o.customer.created_at ? new Date(o.customer.created_at).getTime() : null;
+    if (ca !== null) {
+      if (ca >= yStart  && ca < yEnd)   newCustIds.yest.add(o.customer.id);
+      if (ca >= l7Start && ca < l7End)  newCustIds.last7.add(o.customer.id);
+      if (ca >= p7Start && ca < p7End)  newCustIds.prior7.add(o.customer.id);
+      if (ca >= mStart  && ca < now)    newCustIds.mtd.add(o.customer.id);
+      if (ca >= pmStart && ca < pmEnd)  newCustIds.priorM.add(o.customer.id);
+    }
   }
 }
+
+const aov = (b) => b.count > 0 ? b.rev / b.count : 0;
 
 // Open orders > 24h
 let openCount = 0, oldestMs = null;
@@ -211,32 +243,42 @@ for (const o of refundOrders) {
   }
 }
 
-// Abandoned cart recoveries sent yesterday (wa_sent_log, workflow='abandoned_cart')
+// Abandoned cart recoveries sent yesterday
 let cartRecoveries = 0;
-try {
-  for (const it of $('Read Global Sent Log').all()) {
-    const j = it.json;
-    if (String(j.workflow || '') !== 'abandoned_cart') continue;
-    const t = new Date(j.sent_at || 0).getTime();
-    if (t >= yStart && t < yEnd) cartRecoveries++;
-  }
-} catch (e) { /* log empty on first run */ }
+let _waRows = [];
+try { _waRows = $('Filter Recent Sent Log').all(); }
+catch (e) {
+  try { _waRows = $('Read Global Sent Log').all(); }
+  catch (e2) { _waRows = []; }
+}
+for (const it of _waRows) {
+  const j = it.json;
+  if (String(j.workflow || '') !== 'abandoned_cart') continue;
+  const t = new Date(j.sent_at || 0).getTime();
+  if (t >= yStart && t < yEnd) cartRecoveries++;
+}
 
-const dod = pctStr(revY, revPD);
-const wow = pctStr(revY, revPW);
-
-// --- Goal Tracking section ---
+// --- Goal Tracking ---
 const daysElapsed   = ranges.days_elapsed;
 const daysInMonth   = ranges.days_in_month;
 const daysRemaining = ranges.days_remaining;
-const runRate       = daysElapsed > 0 ? (revMTD / daysElapsed) * daysInMonth : 0;
+const runRate       = daysElapsed > 0 ? (mtd.rev / daysElapsed) * daysInMonth : 0;
+const dailyActual   = daysElapsed > 0 ? mtd.rev / daysElapsed : 0;
 
-const pFloor   = pctOf(revMTD, TARGET_FLOOR);
-const pTarget  = pctOf(revMTD, TARGET_PRIMARY);
-const pStretch = pctOf(revMTD, TARGET_STRETCH);
+const pFloor   = pctOf(mtd.rev, TARGET_FLOOR);
+const pTarget  = pctOf(mtd.rev, TARGET_PRIMARY);
+const pStretch = pctOf(mtd.rev, TARGET_STRETCH);
 
-const needForTarget = Math.max(0, TARGET_PRIMARY - revMTD);
+const monthPctElapsed   = Math.round((daysElapsed / daysInMonth) * 100);
+const paceGapPp         = pTarget - monthPctElapsed;
+const paceLabel         = paceGapPp >= 0
+  ? `+${paceGapPp}pp vs pace ✅`
+  : `${paceGapPp}pp behind pace`;
+
+const needForTarget = Math.max(0, TARGET_PRIMARY - mtd.rev);
+const needForFloor  = Math.max(0, TARGET_FLOOR - mtd.rev);
 const perDayToTarget = daysRemaining > 0 ? needForTarget / daysRemaining : needForTarget;
+const perDayToFloor  = daysRemaining > 0 ? needForFloor / daysRemaining : needForFloor;
 
 let statusLine;
 if (runRate >= TARGET_STRETCH)       statusLine = '💎 On track for Stretch!';
@@ -244,35 +286,86 @@ else if (runRate >= TARGET_PRIMARY)  statusLine = '🚀 On track for Target.';
 else if (runRate >= TARGET_FLOOR)    statusLine = '🎯 On track for Floor. Push for Target.';
 else                                 statusLine = '⚠️ Below Floor run rate.';
 
+// --- Trend rows ---
+function diff(curr, prior) {
+  if (prior === 0 && curr === 0) return '   =';
+  if (prior === 0) return '  new';
+  const p = Math.round(((curr - prior) / prior) * 100);
+  const sign = p > 0 ? '+' : '';
+  const emoji = Math.abs(p) >= 20 ? (p > 0 ? ' 📈' : ' 📉') : '';
+  return `${sign}${p}%${emoji}`;
+}
+function row(label, currStr, priorStr, currNum, priorNum) {
+  return `${label.padEnd(10)}${String(currStr).padStart(8)} vs ${String(priorStr).padStart(7)}  ${diff(currNum, priorNum)}`;
+}
+
+const last7Rows = [
+  row('Revenue',  `S$${fmtSGD0(last7.rev)}`,  `S$${fmtSGD0(prior7.rev)}`,  last7.rev,  prior7.rev),
+  row('Orders',   last7.count,                prior7.count,                last7.count, prior7.count),
+  row('AOV',      `S$${fmtSGD0(aov(last7))}`, `S$${fmtSGD0(aov(prior7))}`, aov(last7), aov(prior7)),
+  row('New cust', newCustIds.last7.size,      newCustIds.prior7.size,      newCustIds.last7.size, newCustIds.prior7.size),
+  row('Sub ords', last7.subs,                 prior7.subs,                 last7.subs, prior7.subs),
+].join('\n');
+
+const momRows = [
+  row('Revenue',  `S$${fmtSGD0(mtd.rev)}`,  `S$${fmtSGD0(priorM.rev)}`,  mtd.rev,  priorM.rev),
+  row('Orders',   mtd.count,                priorM.count,                mtd.count, priorM.count),
+  row('New cust', newCustIds.mtd.size,      newCustIds.priorM.size,      newCustIds.mtd.size, newCustIds.priorM.size),
+].join('\n');
+
+// --- Auto-generated gaps ---
+const gaps = [];
+if (paceGapPp <= -5) {
+  gaps.push(`${Math.abs(paceGapPp)}pp behind monthly pace · need S$${fmtSGD0(perDayToTarget)}/day vs S$${fmtSGD0(dailyActual)}/day actual`);
+}
+if (newCustIds.last7.size < newCustIds.prior7.size * 0.8 && newCustIds.prior7.size > 0) {
+  gaps.push(`New customer acquisition down WoW (${newCustIds.last7.size} vs ${newCustIds.prior7.size}) · top-funnel issue`);
+}
+if (last7.subs < prior7.subs * 0.8 && prior7.subs > 0) {
+  gaps.push(`Subscription orders softening (${last7.subs} vs ${prior7.subs}) · trial conversion or winback`);
+}
+if (aov(last7) < aov(prior7) * 0.9 && prior7.count > 0) {
+  gaps.push(`AOV down (S$${fmtSGD0(aov(last7))} vs S$${fmtSGD0(aov(prior7))}) · cart size shrinking`);
+}
+if (openCount >= 10) {
+  gaps.push(`Open orders >24h: ${openCount}${oldestAgeDays ? ` (oldest ${oldestAgeDays}d)` : ''} · fulfilment queue debt`);
+}
+if (gaps.length === 0) {
+  gaps.push('✅ No immediate red flags');
+}
+const gapBlock = gaps.map(g => `• ${g}`).join('\n');
+
+// --- Message ---
 const bar = (pct) => progressBar(pct, 10);
-const pad = (s, w) => s.padEnd(w, ' ');
-const dodLine = `vs ${ranges.prev_day_label}:`;
-const wowLine = `vs last ${ranges.prev_week_label}:`;
-const cmpWidth = Math.max(dodLine.length, wowLine.length);
 
 const msg = `🐾 *Bon Pet Morning Briefing*
 _${ranges.formatted_date}_
 
-💰 *Yesterday*
-Revenue: S$${fmtSGD2(revY)} (${cntY} order${cntY === 1 ? '' : 's'})
-${pad(dodLine, cmpWidth)} ${dod.text} ${dod.emoji}
-${pad(wowLine, cmpWidth)} ${wow.text} ${wow.emoji}
-
-👥 New customers: ${newCust}
-📦 Open >24h: ${openCount}${oldestAgeDays ? ` (oldest ${oldestAgeDays}d)` : ''}
-↩️ Refunds: ${refundCount}${refundTotal > 0 ? ` (-S$${fmtSGD2(refundTotal)})` : ''}
-🛒 Cart recoveries: ${cartRecoveries}
-
-🎯 *${ranges.month_label} — Day ${daysElapsed} of ${daysInMonth}*
-MTD: S$${fmtSGD0(revMTD)} (${cntMTD} orders) · Run rate S$${fmtSGD0(runRate)}/mo
+🎯 *${ranges.month_label}* · Day ${daysElapsed} of ${daysInMonth} (${monthPctElapsed}% through)
+MTD S$${fmtSGD0(mtd.rev)} · ${mtd.count} orders · Run rate S$${fmtSGD0(runRate)}/mo
 Floor   S$${fmtK(TARGET_FLOOR)}  ${bar(pFloor)}  ${pFloor}%
-Target  S$${fmtK(TARGET_PRIMARY)}  ${bar(pTarget)}  ${pTarget}% 🎯
+Target  S$${fmtK(TARGET_PRIMARY)}  ${bar(pTarget)}  ${pTarget}% 🎯  ${paceLabel}
 Stretch S$${fmtK(TARGET_STRETCH)}  ${bar(pStretch)}  ${pStretch}%
+⏳ ${daysRemaining} day${daysRemaining === 1 ? '' : 's'} left · need S$${fmtSGD0(perDayToTarget)}/day for Target (now S$${fmtSGD0(dailyActual)}/day)
 
-${statusLine}
-_${daysRemaining} day${daysRemaining === 1 ? '' : 's'} left · need S$${fmtSGD0(perDayToTarget)}/day for Target_`;
+📈 *Last 7d vs prior 7d*
+\`\`\`
+${last7Rows}
+\`\`\`
 
-return [{ json: { message: msg, revenue_yesterday: revY, revenue_mtd: revMTD, run_rate: runRate } }];
+📅 *vs ${ranges.prior_month_label} (same window)*
+\`\`\`
+${momRows}
+\`\`\`
+
+🔎 *Gaps to watch*
+${gapBlock}
+
+📦 *Yesterday* · S$${fmtSGD0(yest.rev)} · ${yest.count} order${yest.count === 1 ? '' : 's'} · ${refundCount} refund${refundCount === 1 ? '' : 's'}${refundTotal > 0 ? ` (-S$${fmtSGD2(refundTotal)})` : ''} · ${cartRecoveries} cart recover${cartRecoveries === 1 ? 'y' : 'ies'}
+
+${statusLine}`;
+
+return [{ json: { message: msg, revenue_yesterday: yest.rev, revenue_mtd: mtd.rev, run_rate: runRate } }];
 """.replace("__FLOOR__", str(TARGET_FLOOR)) \
    .replace("__PRIMARY__", str(TARGET_PRIMARY)) \
    .replace("__STRETCH__", str(TARGET_STRETCH))
@@ -343,7 +436,7 @@ def merge_node(name, pos, n_inputs):
         "id": uid(),
         "name": name,
         "type": "n8n-nodes-base.merge",
-        "typeVersion": 3.1,
+        "typeVersion": 3,
         "position": pos,
     }
 
@@ -379,7 +472,7 @@ def build():
         "id": uid(),
         "name": "Daily 9AM SGT",
         "type": "n8n-nodes-base.scheduleTrigger",
-        "typeVersion": 1.3,
+        "typeVersion": 1.2,
         "position": [0, 400],
     }
 
@@ -406,7 +499,7 @@ def build():
         "=" + base + "/orders.json?status=any&financial_status=paid"
         "&created_at_min={{ $json.fetch_start }}"
         "&created_at_max={{ $json.fetch_end }}"
-        "&limit=250&fields=id,total_price,created_at,customer,financial_status,cancelled_at"
+        "&limit=250&fields=id,total_price,created_at,customer,financial_status,cancelled_at,discount_codes"
     )
     fetch_open = shopify_node(
         "Fetch Open Orders", [480, 400],
@@ -423,7 +516,8 @@ def build():
     )
 
     read_wa_log = read_global_sent_log_node([480, 800])
-    merge = merge_node("Merge Fetches", [720, 400], 4)
+    filter_wa = filter_recent_sent_log_node([640, 800])
+    merge = merge_node("Merge Fetches", [880, 400], 4)
     aggregate = code_node("Aggregate & Format", [960, 400], AGGREGATE_JS)
 
     wa_sends = [
@@ -434,7 +528,7 @@ def build():
         "Send Telegram Weslee", [1200, 200 + len(RECIPIENTS) * 100]
     )
 
-    nodes = [schedule, manual, set_dates, fetch_orders, fetch_open, fetch_refunds, read_wa_log, merge, aggregate, *wa_sends, telegram_send]
+    nodes = [schedule, manual, set_dates, fetch_orders, fetch_open, fetch_refunds, read_wa_log, filter_wa, merge, aggregate, *wa_sends, telegram_send]
 
     connections = {
         schedule["name"]:      {"main": [[{"node": set_dates["name"], "type": "main", "index": 0}]]},
@@ -450,7 +544,8 @@ def build():
         fetch_orders["name"]:  {"main": [[{"node": merge["name"], "type": "main", "index": 0}]]},
         fetch_open["name"]:    {"main": [[{"node": merge["name"], "type": "main", "index": 1}]]},
         fetch_refunds["name"]: {"main": [[{"node": merge["name"], "type": "main", "index": 2}]]},
-        read_wa_log["name"]:   {"main": [[{"node": merge["name"], "type": "main", "index": 3}]]},
+        read_wa_log["name"]:   {"main": [[{"node": filter_wa["name"], "type": "main", "index": 0}]]},
+        filter_wa["name"]:     {"main": [[{"node": merge["name"], "type": "main", "index": 3}]]},
         merge["name"]:         {"main": [[{"node": aggregate["name"], "type": "main", "index": 0}]]},
         aggregate["name"]:     {"main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*wa_sends, telegram_send]]]},
     }
