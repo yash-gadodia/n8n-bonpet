@@ -64,10 +64,12 @@ DRY_RUN          = True   # Flip False to send to real customers.
 SEND_WA_DISABLED = False  # Hard-off for the WA send node (use during diagnostic runs).
 
 # === COHORT CONFIG ===
+# Windows are measured by days_since_last_paid_sub_order (behavior),
+# not by Subscribers-sheet received_at (which can fire on routine webhooks).
 PAUSED_MIN_DAYS    = 21
 PAUSED_MAX_DAYS    = 90
-CANCELLED_MIN_DAYS = 30
-CANCELLED_MAX_DAYS = 180
+CANCELLED_MIN_DAYS = 14
+CANCELLED_MAX_DAYS = 365
 DAILY_CAP_PER_COHORT = 5
 
 
@@ -140,9 +142,10 @@ function normEmail(e) { return String(e || '').toLowerCase().trim(); }
 """ + COOLDOWN_JS_SNIPPET + BLACKLIST_JS_SNIPPET + r"""
 
 // --- Load all source nodes ---
-const subRows  = $('Read Subscribers').all().map(it => it.json);
-const custRows = $('Read Customers').all().map(it => it.json);
-const sentRows = $('Read Reactivation Sent').all().map(it => it.json);
+const subRows   = $('Read Subscribers').all().map(it => it.json);
+const custRows  = $('Read Customers').all().map(it => it.json);
+const sentRows  = $('Read Reactivation Sent').all().map(it => it.json);
+const orderRows = $('Read Orders').all().map(it => it.json);
 
 // --- Build lookup: customer_id / email -> {phone, first_name} ---
 const custByEmail   = new Map();
@@ -164,6 +167,41 @@ for (const r of sentRows) {
   const contractId = String(r.contract_id || '').trim();
   if (cid) alreadyReactivated.add('cust:' + cid);
   if (contractId) alreadyReactivated.add('contract:' + contractId);
+}
+
+// --- Build lookup: email + customer_id -> {last_sub_order_ts, last_any_order_ts} ---
+// We prefer the last SUBSCRIPTION order (is_subscription === true/'TRUE') as the
+// staleness anchor — that's the moment they were last on the subscription cadence.
+// Fall back to last-any-order if they have no sub order on file.
+//
+// EMAIL is the primary join key: customer_id is empty on most order rows
+// (~93% of orders in the sheet have no customer_id), but email coverage is
+// near-100%. customer_id remains a fallback.
+const orderInfoByEmail = new Map();
+const orderInfoByCust  = new Map();
+function parseDate(d) {
+  if (!d) return null;
+  const t = Date.parse(d);
+  return isNaN(t) ? null : t;
+}
+function upsertOrderInfo(map, key, t, isSub) {
+  let rec = map.get(key);
+  if (!rec) {
+    rec = { last_sub_ts: null, last_any_ts: null };
+    map.set(key, rec);
+  }
+  if (t > (rec.last_any_ts || 0)) rec.last_any_ts = t;
+  if (isSub && t > (rec.last_sub_ts || 0)) rec.last_sub_ts = t;
+}
+for (const o of orderRows) {
+  const t = parseDate(o.order_date);
+  if (!t) continue;
+  const isSub = (o.is_subscription === true) ||
+                (String(o.is_subscription || '').toUpperCase() === 'TRUE');
+  const em  = normEmail(o.email);
+  const cid = String(o.customer_id || '').trim();
+  if (em)  upsertOrderInfo(orderInfoByEmail, em, t, isSub);
+  if (cid) upsertOrderInfo(orderInfoByCust,  cid, t, isSub);
 }
 
 // --- Dedupe sub rows by contract_id; one record per contract ---
@@ -189,6 +227,7 @@ const stats = {
   candidates_paused:      0,
   candidates_cancelled:   0,
   skip_status:            0,
+  skip_no_order_history:  0,
   skip_window:            0,
   skip_already_sent:      0,
   skip_no_customer_match: 0,
@@ -222,10 +261,14 @@ for (const c of contracts.values()) {
     continue;
   }
 
-  // received_at = most recent webhook (status change or update). Treat as proxy for
-  // when the customer entered current status. Skip if missing.
-  if (!c.received_at) { stats.skip_window++; continue; }
-  const daysSince = (nowMs - c.received_at) / DAY_MS;
+  // Behavior-based staleness: prefer last paid SUB order; fall back to last any order.
+  // Email-first join (customer_id is sparse in orders sheet).
+  const orderInfo = (c.email && orderInfoByEmail.get(c.email)) ||
+                    (c.customer_id && orderInfoByCust.get(c.customer_id)) ||
+                    null;
+  const lastOrderTs = orderInfo ? (orderInfo.last_sub_ts || orderInfo.last_any_ts) : null;
+  if (!lastOrderTs) { stats.skip_no_order_history++; continue; }
+  const daysSince = (nowMs - lastOrderTs) / DAY_MS;
   if (daysSince < minDays || daysSince > maxDays) { stats.skip_window++; continue; }
 
   if (alreadyReactivated.has('cust:' + c.customer_id) ||
@@ -246,15 +289,16 @@ for (const c of contracts.values()) {
   if (isInGlobalCooldown(phone)) { stats.skip_global_cooldown++; continue; }
 
   const candidate = {
-    contract_id:     c.contract_id,
-    customer_id:     c.customer_id,
-    email:           c.email,
-    phone:           phone,
-    first_name:      cust.first_name || 'there',
-    cohort:          cohort,
-    status_at_send:  status,
-    days_since:      Math.round(daysSince),
-    received_at_iso: new Date(c.received_at).toISOString(),
+    contract_id:        c.contract_id,
+    customer_id:        c.customer_id,
+    email:              c.email,
+    phone:              phone,
+    first_name:         cust.first_name || 'there',
+    cohort:             cohort,
+    status_at_send:     status,
+    days_since:         Math.round(daysSince),
+    last_order_iso:     new Date(lastOrderTs).toISOString(),
+    staleness_basis:    (orderInfo && orderInfo.last_sub_ts === lastOrderTs) ? 'last_sub_order' : 'last_any_order',
   };
   if (cohort === 'paused') {
     candidatesPaused.push(candidate);
@@ -318,7 +362,7 @@ const modeTag = DRY_RUN ? '🧪 DRY RUN' : '📬 LIVE';
 const samplePaused    = sendPaused[0];
 const sampleCancelled = sendCancelled[0];
 const sampleBlock = (s, label) => s
-  ? `\n*Sample ${label}* → ${redact(s.first_name)} (${s.phone.slice(0,4)}***, ${s.days_since}d ${s.cohort}):\n${(s.cohort === 'paused' ? PAUSED_TEMPLATE : CANCELLED_TEMPLATE).replace(/\{first_name\}/g, redact(s.first_name)).slice(0, 400)}…`
+  ? `\n*Sample ${label}* → ${redact(s.first_name)} (${s.phone.slice(0,4)}***, ${s.days_since}d since last ${s.staleness_basis === 'last_sub_order' ? 'sub order' : 'order'}):\n${(s.cohort === 'paused' ? PAUSED_TEMPLATE : CANCELLED_TEMPLATE).replace(/\{first_name\}/g, redact(s.first_name)).slice(0, 400)}…`
   : `\n*No ${label} candidates today.*`;
 
 const headerMsg = `🔁 *Sub Reactivation — ${modeTag}*\n📅 ${new Date().toISOString().slice(0,10)}\n\n` +
@@ -326,11 +370,12 @@ const headerMsg = `🔁 *Sub Reactivation — ${modeTag}*\n📅 ${new Date().toI
   `   • Paused-stale: ${stats.sending_paused} (cap ${DAILY_CAP_PER_COHORT})\n` +
   `   • Cancelled-stale: ${stats.sending_cancelled} (cap ${DAILY_CAP_PER_COHORT})\n` +
   `   • Capped: ${stats.capped_out_paused + stats.capped_out_cancelled} (waiting)\n\n` +
-  `📊 *Funnel*\n` +
+  `📊 *Funnel* (staleness = days since last paid sub order)\n` +
   `• Contracts scanned: ${stats.contracts_total}\n` +
   `• Eligible paused (pre-cap): ${stats.candidates_paused}\n` +
   `• Eligible cancelled (pre-cap): ${stats.candidates_cancelled}\n` +
   `• Skip wrong status: ${stats.skip_status}\n` +
+  `• Skip no order history: ${stats.skip_no_order_history}\n` +
   `• Skip outside window: ${stats.skip_window}\n` +
   `• Skip already reactivated: ${stats.skip_already_sent}\n` +
   `• Skip no customer match: ${stats.skip_no_customer_match}\n` +
@@ -576,11 +621,12 @@ def build():
     # Data reads
     read_subs      = gs_read_node("Read Subscribers",         [240, 100], SUB_SHEET_GID, "subscribers")
     read_customers = gs_read_node("Read Customers",           [240, 300], CUSTOMERS_TAB_GID, "customers")
-    read_react     = gs_read_node("Read Reactivation Sent",   [240, 500], REACT_SENT_GID, REACT_SENT_TAB)
-    read_global    = read_global_sent_log_node([240, 700])
-    filter_global  = filter_recent_sent_log_node([400, 700], days=14)
+    read_orders    = gs_read_node("Read Orders",              [240, 500], ORDERS_TAB_GID, "orders")
+    read_react     = gs_read_node("Read Reactivation Sent",   [240, 700], REACT_SENT_GID, REACT_SENT_TAB)
+    read_global    = read_global_sent_log_node([240, 900])
+    filter_global  = filter_recent_sent_log_node([400, 900], days=14)
 
-    merge = merge_node("Merge", [600, 400], 4)
+    merge = merge_node("Merge", [600, 500], 5)
 
     # Inject template + flags into the compute JS.
     compute_js = (COMPUTE_JS
@@ -613,7 +659,7 @@ def build():
 
     nodes = [
         schedule, manual,
-        read_subs, read_customers, read_react, read_global, filter_global,
+        read_subs, read_customers, read_orders, read_react, read_global, filter_global,
         merge, compute,
         route_summary, route_customer,
         telegram_summary, send_wa,
@@ -624,20 +670,23 @@ def build():
         schedule["name"]: {"main": [[
             {"node": read_subs["name"],      "type": "main", "index": 0},
             {"node": read_customers["name"], "type": "main", "index": 0},
+            {"node": read_orders["name"],    "type": "main", "index": 0},
             {"node": read_react["name"],     "type": "main", "index": 0},
             {"node": read_global["name"],    "type": "main", "index": 0},
         ]]},
         manual["name"]: {"main": [[
             {"node": read_subs["name"],      "type": "main", "index": 0},
             {"node": read_customers["name"], "type": "main", "index": 0},
+            {"node": read_orders["name"],    "type": "main", "index": 0},
             {"node": read_react["name"],     "type": "main", "index": 0},
             {"node": read_global["name"],    "type": "main", "index": 0},
         ]]},
         read_subs["name"]:      {"main": [[{"node": merge["name"], "type": "main", "index": 0}]]},
         read_customers["name"]: {"main": [[{"node": merge["name"], "type": "main", "index": 1}]]},
-        read_react["name"]:     {"main": [[{"node": merge["name"], "type": "main", "index": 2}]]},
+        read_orders["name"]:    {"main": [[{"node": merge["name"], "type": "main", "index": 2}]]},
+        read_react["name"]:     {"main": [[{"node": merge["name"], "type": "main", "index": 3}]]},
         read_global["name"]:    {"main": [[{"node": filter_global["name"], "type": "main", "index": 0}]]},
-        filter_global["name"]:  {"main": [[{"node": merge["name"], "type": "main", "index": 3}]]},
+        filter_global["name"]:  {"main": [[{"node": merge["name"], "type": "main", "index": 4}]]},
         merge["name"]:          {"main": [[{"node": compute["name"], "type": "main", "index": 0}]]},
         compute["name"]: {"main": [[
             {"node": route_summary["name"],  "type": "main", "index": 0},
