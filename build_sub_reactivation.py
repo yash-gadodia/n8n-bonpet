@@ -389,7 +389,7 @@ const modeTag = DRY_RUN ? '🧪 DRY RUN' : '📬 LIVE';
 const samplePaused    = sendPaused[0];
 const sampleCancelled = sendCancelled[0];
 const sampleBlock = (s, label) => s
-  ? `\n*Sample ${label}* → ${redact(s.first_name)} (${s.phone.slice(0,4)}***, ${s.days_since}d since last order of any type):\n${(s.cohort === 'paused' ? PAUSED_TEMPLATE : CANCELLED_TEMPLATE).replace(/\{first_name\}/g, redact(s.first_name)).slice(0, 400)}…`
+  ? `\n*Sample ${label}* → ${redact(s.first_name)} (${s.phone.slice(0,4)}***, ${s.days_since}d since last order of any type):\n${(s.cohort === 'paused' ? PAUSED_TEMPLATE : CANCELLED_TEMPLATE).replace(/\{first_name\}/g, redact(s.first_name))}`
   : `\n*No ${label} candidates today.*`;
 
 const headerMsg = `🔁 *Sub Reactivation — ${modeTag}*\n📅 ${new Date().toISOString().slice(0,10)}\n\n` +
