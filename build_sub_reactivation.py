@@ -60,7 +60,7 @@ WA_KEY = subprocess.check_output(
 YASH_PHONE = "+6581394225"
 
 # === KILL SWITCHES ===
-DRY_RUN          = True   # Flip False to send to real customers.
+DRY_RUN          = False  # 2026-05-17: live with Yash's explicit go-ahead after DRY review.
 SEND_WA_DISABLED = False  # Hard-off for the WA send node (use during diagnostic runs).
 
 # === COHORT CONFIG ===
