@@ -9,7 +9,7 @@ import urllib.error
 from _notify import telegram_send_node
 import subprocess
 
-WF_ID = "34qDWk4VJqPgwtq5"
+WF_ID = "lN4Bo5DOTVgGnpGl"
 DOC_ID = "1yYzRL5pkpmoPflL_vzOUeI_eimaOTMH7gfv_INlplx8"
 SHEET_GID = 887506772
 SHEET_NAME = "FOOD PRODUCTION"
@@ -53,13 +53,13 @@ for (const it of items) {
 critical.sort((a, b) => a.balance - b.balance);
 low.sort((a, b) => a.balance - b.balance);
 
-const critLines = critical.map(p => `🔴 *${p.product}* — only *${p.balance}* left`).join('\n');
-const lowLines  = low.map(p => `• ${p.product} — ${p.balance}`).join('\n');
+const critLines = critical.map(p => `🔴 *${p.product}* - only *${p.balance}* left`).join('\n');
+const lowLines  = low.map(p => `• ${p.product} - ${p.balance}`).join('\n');
 
 const criticalMsg = critical.length === 0 ? '' :
 `🚨🚨🚨 *CRITICAL STOCK ALERT* 🚨🚨🚨
 
-⛔ *URGENT — RESTOCK IMMEDIATELY* ⛔
+⛔ *URGENT - RESTOCK IMMEDIATELY* ⛔
 📅 ${today}
 
 The following products are below *50 units*:
@@ -69,7 +69,7 @@ ${critLines}
 ⚠️ _Production needed ASAP to avoid stockouts._`;
 
 const lowMsg = low.length === 0 ? '' :
-`🟡 *Low Stock — The Bon Pet*
+`🟡 *Low Stock - The Bon Pet*
 📅 ${today}
 
 The following products are below *100 units*:
@@ -78,6 +78,9 @@ ${lowLines}
 
 _Plan production within the next few days._`;
 
+const allOk = critical.length === 0 && low.length === 0;
+const okMsg = !allOk ? '' : `✅ Stock OK, all GC SKUs ≥100 units (${today})`;
+
 return [{
   json: {
     today,
@@ -85,8 +88,10 @@ return [{
     low_count: low.length,
     has_critical: critical.length > 0,
     has_low: low.length > 0,
+    all_ok: allOk,
     critical_msg: criticalMsg,
     low_msg: lowMsg,
+    ok_msg: okMsg,
     critical_items: critical,
     low_items: low
   }
@@ -152,7 +157,7 @@ def if_node(name, pos, left_value):
         "id": uid(),
         "name": name,
         "type": "n8n-nodes-base.if",
-        "typeVersion": 2.3,
+        "typeVersion": 2.2,
         "position": pos,
     }
 
@@ -165,7 +170,7 @@ def build():
         "id": uid(),
         "name": "Daily 9AM SGT",
         "type": "n8n-nodes-base.scheduleTrigger",
-        "typeVersion": 1.3,
+        "typeVersion": 1.2,
         "position": [0, 300],
     }
 
@@ -190,7 +195,7 @@ def build():
         "id": uid(),
         "name": "Read Stock Sheet",
         "type": "n8n-nodes-base.googleSheets",
-        "typeVersion": 4.7,
+        "typeVersion": 4.5,
         "position": [240, 300],
         "credentials": {
             "googleSheetsOAuth2Api": {"id": GS_CRED_ID, "name": GS_CRED_NAME}
@@ -208,23 +213,31 @@ def build():
 
     if_critical = if_node("Has Critical?", [720, 100], "={{ $json.has_critical }}")
     if_low = if_node("Has Low?", [720, 500], "={{ $json.has_low }}")
+    if_ok = if_node("All OK?", [720, 1300], "={{ $json.all_ok }}")
 
     crit_msg = "={{ $json.critical_msg }}"
     low_msg = "={{ $json.low_msg }}"
+    ok_msg = "={{ $json.ok_msg }}"
 
     crit_sends = [whatsapp_node(f"Send Critical #{i+1}", [960, i*100], crit_msg, p)
                   for i, p in enumerate(RECIPIENTS)]
     low_sends = [whatsapp_node(f"Send Low #{i+1}", [960, 400 + i*100], low_msg, p)
                  for i, p in enumerate(RECIPIENTS)]
+    ok_sends = [whatsapp_node(f"Send OK #{i+1}", [960, 1200 + i*100], ok_msg, p)
+                for i, p in enumerate(RECIPIENTS)]
     telegram_crit = telegram_send_node(
         "Send Telegram Weslee (Critical)", [960, len(RECIPIENTS)*100], crit_msg
     )
     telegram_low = telegram_send_node(
         "Send Telegram Weslee (Low)", [960, 400 + len(RECIPIENTS)*100], low_msg
     )
+    telegram_ok = telegram_send_node(
+        "Send Telegram Weslee (OK)", [960, 1200 + len(RECIPIENTS)*100], ok_msg
+    )
 
-    nodes = [schedule, read_sheet, classify, if_critical, if_low,
-             *crit_sends, *low_sends, telegram_crit, telegram_low]
+    nodes = [schedule, read_sheet, classify, if_critical, if_low, if_ok,
+             *crit_sends, *low_sends, *ok_sends,
+             telegram_crit, telegram_low, telegram_ok]
 
     connections = {
         schedule["name"]: {
@@ -237,6 +250,7 @@ def build():
             "main": [[
                 {"node": if_critical["name"], "type": "main", "index": 0},
                 {"node": if_low["name"], "type": "main", "index": 0},
+                {"node": if_ok["name"], "type": "main", "index": 0},
             ]]
         },
         if_critical["name"]: {
@@ -248,6 +262,12 @@ def build():
         if_low["name"]: {
             "main": [
                 [{"node": n["name"], "type": "main", "index": 0} for n in [*low_sends, telegram_low]],
+                [],
+            ]
+        },
+        if_ok["name"]: {
+            "main": [
+                [{"node": n["name"], "type": "main", "index": 0} for n in [*ok_sends, telegram_ok]],
                 [],
             ]
         },

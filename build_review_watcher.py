@@ -14,9 +14,10 @@ import urllib.request
 import urllib.error
 
 from _notify import telegram_send_node
-from _sent_log import (
 import subprocess
-    read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
+from _sent_log import (
+    read_global_sent_log_node, filter_recent_sent_log_node,
+    append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
 
 API = "https://n8n.thebonpet.com/api/v1"
@@ -75,7 +76,7 @@ return reviews.map(r => ({
 }));
 """
 
-DECIDE_ACTION_JS = r"""// Decide what to do with each review: team_alert | customer_thanks | skip (log-only)
+DECIDE_ACTION_JS = (r"""// Decide what to do with each review: team_alert | customer_thanks | skip (log-only)
 const NEG_THRESHOLD = __NEG__;
 const POS_TRIGGER   = __POS__;
 const PROMO = "__PROMO__";
@@ -235,7 +236,7 @@ for (const r of reviews) {
 }
 
 return output;
-""".replace("__NEG__", str(NEGATIVE_STAR_THRESHOLD)) \
+""").replace("__NEG__", str(NEGATIVE_STAR_THRESHOLD)) \
    .replace("__POS__", str(POSITIVE_STAR_TRIGGER)) \
    .replace("__PROMO__", REVIEW_THANK_YOU_PROMO_CODE)
 
@@ -399,7 +400,7 @@ def if_action(name, pos, action):
             "options": {},
         },
         "id": uid(), "name": name,
-        "type": "n8n-nodes-base.if", "typeVersion": 2.3,
+        "type": "n8n-nodes-base.if", "typeVersion": 2.2,
         "position": pos,
     }
 
@@ -450,9 +451,10 @@ def customer_wa_node(name, pos):
 
 def build():
     schedule = {
-        "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": "0 * * * *"}]}},
+        # Stagger off HH:00 to avoid memory pressure when other crons cluster.
+        "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": "7 * * * *"}]}},
         "id": uid(), "name": "Hourly",
-        "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.3,
+        "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2,
         "position": [0, 400],
     }
     manual = {
@@ -483,25 +485,28 @@ def build():
     read_log = {
         "parameters": {**sheet_ref(REVIEW_LOG_TAB_GID), "options": {}},
         "id": uid(), "name": "Read Review Log",
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": [480, 400],
         "credentials": {"googleSheetsOAuth2Api": {"id": GS_CRED_ID, "name": GS_CRED_NAME}},
+        "executeOnce": True,
     }
     read_customers = {
         "parameters": {**sheet_ref(CUSTOMERS_TAB_GID), "options": {}},
         "id": uid(), "name": "Read Customers Tab",
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": [480, 600],
         "credentials": {"googleSheetsOAuth2Api": {"id": GS_CRED_ID, "name": GS_CRED_NAME}},
+        "executeOnce": True,
     }
 
     read_global = read_global_sent_log_node([480, 800])
+    filter_global = filter_recent_sent_log_node([640, 800])
 
     merge = {
         "parameters": {"numberInputs": 4},
         "id": uid(), "name": "Merge Reads",
-        "type": "n8n-nodes-base.merge", "typeVersion": 3.1,
-        "position": [720, 400],
+        "type": "n8n-nodes-base.merge", "typeVersion": 3,
+        "position": [880, 400],
     }
 
     decide = code_node("Decide Action", [960, 400], DECIDE_ACTION_JS)
@@ -522,7 +527,7 @@ def build():
             "options": {},
         },
         "id": uid(), "name": "Append to Log",
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": [1680, 800],
         "credentials": {"googleSheetsOAuth2Api": {"id": GS_CRED_ID, "name": GS_CRED_NAME}},
     }
@@ -538,7 +543,8 @@ def build():
     send_apology = customer_wa_node("Send Customer Apology", [1680, 600])
     log_global   = append_global_sent_log_node([1920, 500])
 
-    nodes = [schedule, manual, fetch_reviews, parse, read_log, read_customers, read_global, merge,
+    nodes = [schedule, manual, fetch_reviews, parse, read_log, read_customers,
+             read_global, filter_global, merge,
              decide, if_team, if_thanks, if_apology,
              format_team, format_thanks, format_apology,
              append_log, send_thanks, send_apology, log_global, *team_sends, telegram_send]
@@ -555,7 +561,8 @@ def build():
         parse["name"]:          {"main": [[{"node": merge["name"], "type": "main", "index": 0}]]},
         read_log["name"]:       {"main": [[{"node": merge["name"], "type": "main", "index": 1}]]},
         read_customers["name"]: {"main": [[{"node": merge["name"], "type": "main", "index": 2}]]},
-        read_global["name"]:    {"main": [[{"node": merge["name"], "type": "main", "index": 3}]]},
+        read_global["name"]:    {"main": [[{"node": filter_global["name"], "type": "main", "index": 0}]]},
+        filter_global["name"]:  {"main": [[{"node": merge["name"], "type": "main", "index": 3}]]},
         merge["name"]:          {"main": [[{"node": decide["name"], "type": "main", "index": 0}]]},
         decide["name"]: {"main": [[
             {"node": if_team["name"],    "type": "main", "index": 0},

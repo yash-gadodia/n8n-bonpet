@@ -54,6 +54,29 @@ def read_global_sent_log_node(position, name="Read Global Sent Log"):
     }
 
 
+def filter_recent_sent_log_node(position, name="Filter Recent Sent Log", days=14):
+    """Drops wa_sent_log rows older than `days`. Place between
+    read_global_sent_log_node and the downstream Merge to keep merge memory
+    bounded as the log grows. Cooldown is 7d; 14d default gives a buffer.
+    """
+    js = (
+        f"const CUTOFF_MS = {days} * 24 * 60 * 60 * 1000;\n"
+        "const now = Date.now();\n"
+        "return $input.all().filter(it => {\n"
+        "  const t = Date.parse((it.json && it.json.sent_at) || '');\n"
+        "  if (isNaN(t)) return false;\n"
+        "  return (now - t) <= CUTOFF_MS;\n"
+        "});\n"
+    )
+    import uuid as _uuid
+    return {
+        "parameters": {"jsCode": js},
+        "id": str(_uuid.uuid4()), "name": name,
+        "type": "n8n-nodes-base.code", "typeVersion": 2,
+        "position": position,
+    }
+
+
 def append_global_sent_log_node(position, name="Log Global Sent"):
     """Google Sheets append node. Assumes upstream items carry the 6 column fields
     (phone, workflow, template, sent_at, order_id, notes) at the top level of json.
@@ -90,12 +113,18 @@ def append_global_sent_log_node(position, name="Log Global Sent"):
 # Default 7 days = 604800000 ms.
 COOLDOWN_JS_SNIPPET = r"""
 // --- Global WA cooldown (spam prevention across workflows) ---
-// Reads wa_sent_log via the "Read Global Sent Log" upstream node. Any customer
-// messaged by ANY workflow in the last N days is excluded.
+// Prefers "Filter Recent Sent Log" if present (bounded memory); falls back to
+// "Read Global Sent Log" so workflows without the filter still work.
 const GLOBAL_COOLDOWN_DAYS = 7;
 const GLOBAL_COOLDOWN_MS = GLOBAL_COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
 const GLOBAL_LAST_SENT = new Map();
-for (const it of $('Read Global Sent Log').all()) {
+let _sentRows = [];
+try { _sentRows = $('Filter Recent Sent Log').all(); }
+catch (e) {
+  try { _sentRows = $('Read Global Sent Log').all(); }
+  catch (e2) { _sentRows = []; }
+}
+for (const it of _sentRows) {
   const s = it.json;
   const p = normalizePhone(s.phone);
   if (!p) continue;
