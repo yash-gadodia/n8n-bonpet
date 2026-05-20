@@ -89,6 +89,35 @@ function normalizePhone(p) {
 }
 """ + COOLDOWN_JS_SNIPPET + BLACKLIST_JS_SNIPPET + r"""
 
+// Rival-workflow guard — don't trial-nurture if reorder_reminder sent recently.
+// Janani case (2026-05-20): she got reorder May 1 + D21 May 11 = 2 reorder-flavoured nudges in 10d.
+// 14d window catches the reorder→D21 pile-on without breaking the D7→D14→D21 own cadence.
+const NURTURE_RIVAL_DAYS = 14;
+const NURTURE_RIVAL_MS = NURTURE_RIVAL_DAYS * 24 * 60 * 60 * 1000;
+const NURTURE_RIVALS = new Set(['reorder_reminder']);
+const NURTURE_RIVAL_BY_PHONE = new Map();
+let _nrRows = [];
+try { _nrRows = $('Filter Recent Sent Log').all(); }
+catch (e) {
+  try { _nrRows = $('Read Global Sent Log').all(); }
+  catch (e2) { _nrRows = []; }
+}
+for (const it of _nrRows) {
+  const s = it.json;
+  if (!NURTURE_RIVALS.has(String(s.workflow || ''))) continue;
+  const p = normalizePhone(s.phone);
+  if (!p) continue;
+  const t = new Date(s.sent_at || 0).getTime();
+  if (!t) continue;
+  const prev = NURTURE_RIVAL_BY_PHONE.get(p) || 0;
+  if (t > prev) NURTURE_RIVAL_BY_PHONE.set(p, t);
+}
+function isInRivalNudgeWindow(phone) {
+  const last = NURTURE_RIVAL_BY_PHONE.get(phone);
+  if (!last) return false;
+  return (Date.now() - last) < NURTURE_RIVAL_MS;
+}
+
 // Parse order_date (usually ISO string) to days since
 function daysSinceOrder(orderDateStr) {
   const orderDate = new Date(orderDateStr);
@@ -215,6 +244,12 @@ for (const [key, custOrders] of ordersByKey) {
     continue;
   }
 
+  // Exclusion: reorder_reminder fired for this phone in last 14d (rival nudge guard)
+  if (isInRivalNudgeWindow(phone)) {
+    stats.skipped_rival_nudge = (stats.skipped_rival_nudge || 0) + 1;
+    continue;
+  }
+
   // Exclusion: repo-versioned blacklist (BLACKLIST.txt). Hard-stop opt-outs.
   if (isBlacklisted(phone)) {
     stats.skipped_blacklist = (stats.skipped_blacklist || 0) + 1;
@@ -292,6 +327,7 @@ const diag = [
   `• Skipped (no phone): ${stats.skipped_no_phone}`,
   `• Skipped (already sent this step): ${stats.skipped_already_sent}`,
   `• Skipped (global 7d cooldown): ${stats.skipped_global_cooldown || 0}`,
+  `• Skipped (rival 14d — reorder_reminder): ${stats.skipped_rival_nudge || 0}`,
   `• Skipped (blacklist): ${stats.skipped_blacklist || 0}`,
   ``,
   `📬 *Sends this run*`,
