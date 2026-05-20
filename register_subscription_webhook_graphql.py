@@ -13,17 +13,17 @@ import urllib.request
 import urllib.error
 import sys
 
-API = "https://thebonpet.app.n8n.cloud/api/v1"
+API = "https://n8n.thebonpet.com/api/v1"
 WF_NAME = "Subscription Webhook Registrar (one-off)"
 TEAM_PROJECT_ID = "i1GSXBntwNvNqic8"
 WEBHOOK_ID = "subscription-webhook-registrar-ea2f91"
 
 SHOPIFY_STORE = "d2ac44-d5"
 SHOPIFY_API = "2024-10"
-SHOPIFY_CRED_ID = "heQ68zjV90EpARzU"
+SHOPIFY_CRED_ID = "4d1xmXLJqGoPK6TX"
 SHOPIFY_CRED_NAME = "Shopify Access Token n8n"
 
-CALLBACK_URL = "https://thebonpet.app.n8n.cloud/webhook/subscription-save-8c4f2e9a3b"
+CALLBACK_URL = "https://n8n.thebonpet.com/webhook/subscription-save-8c4f2e9a3b"
 
 GRAPHQL_MUTATION = """mutation {
   webhookSubscriptionCreate(
@@ -48,7 +48,7 @@ def uid(): return str(uuid.uuid4())
 
 
 def http(method, path, body=None):
-    key = open(os.path.expanduser("~/.n8n-bonpet-key")).read().strip()
+    key = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
     req = urllib.request.Request(
         f"{API}{path}",
         data=json.dumps(body).encode() if body is not None else None,
@@ -57,6 +57,7 @@ def http(method, path, body=None):
             "X-N8N-API-KEY": key,
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         },
     )
     try:
@@ -137,7 +138,7 @@ def build_workflow():
             "options": {},
         },
         "id": uid(), "name": "Needs Registering?",
-        "type": "n8n-nodes-base.if", "typeVersion": 2.3,
+        "type": "n8n-nodes-base.if", "typeVersion": 2.2,
         "position": [720, 300],
     }
 
@@ -204,7 +205,7 @@ def main():
     http("POST", f"/workflows/{wf_id}/activate")
 
     req = urllib.request.Request(
-        f"https://thebonpet.app.n8n.cloud/webhook/{WEBHOOK_ID}",
+        f"https://n8n.thebonpet.com/webhook/{WEBHOOK_ID}",
         data=b"{}", method="POST",
         headers={"Content-Type": "application/json"},
     )
