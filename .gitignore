@@ -38,3 +38,4 @@ refactor_to_keychain.py
 
 # Workflow snapshots (contain resolved secrets from keychain at build time)
 .snapshot_*.json
+.snapshots/

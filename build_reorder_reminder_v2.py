@@ -70,6 +70,35 @@ for (const it of $('Read Sent Log').all()) {
   if (p) ALREADY_SENT_PHONES.add(p);
 }
 """ + COOLDOWN_JS_SNIPPET + BLACKLIST_JS_SNIPPET + r"""
+
+// Rival-workflow guard — don't reorder-nudge if post_trial_nurture sent recently.
+// Janani case (2026-05-20): she got reorder May 1 + post_trial D21 May 11 = 2 reorder-flavoured nudges in 10d.
+// 30d window matches post_trial_nurture's D7→D21 cycle: while a trial customer is being nurtured, hold reorder.
+const REORDER_RIVAL_DAYS = 30;
+const REORDER_RIVAL_MS = REORDER_RIVAL_DAYS * 24 * 60 * 60 * 1000;
+const REORDER_RIVALS = new Set(['post_trial_nurture']);
+const RECENT_RIVAL_BY_PHONE = new Map();
+let _rivalRows = [];
+try { _rivalRows = $('Filter Recent Sent Log').all(); }
+catch (e) {
+  try { _rivalRows = $('Read Global Sent Log').all(); }
+  catch (e2) { _rivalRows = []; }
+}
+for (const it of _rivalRows) {
+  const s = it.json;
+  if (!REORDER_RIVALS.has(String(s.workflow || ''))) continue;
+  const p = normalizePhone(s.phone);
+  if (!p) continue;
+  const t = new Date(s.sent_at || 0).getTime();
+  if (!t) continue;
+  const prev = RECENT_RIVAL_BY_PHONE.get(p) || 0;
+  if (t > prev) RECENT_RIVAL_BY_PHONE.set(p, t);
+}
+function isInRivalNudgeWindow(phone) {
+  const last = RECENT_RIVAL_BY_PHONE.get(phone);
+  if (!last) return false;
+  return (Date.now() - last) < REORDER_RIVAL_MS;
+}
 const DEFAULT_CADENCE_DAYS = 14;
 const GRAMS_PER_DAY = 150;
 const MIN_CADENCE = 5;
@@ -131,6 +160,7 @@ for (const [key, custOrders] of ordersByKey) {
   if (!phone) { stats.skipped_no_phone++; continue; }
   if (ALREADY_SENT_PHONES.has(phone)) { stats.skipped_already_sent = (stats.skipped_already_sent || 0) + 1; continue; }
   if (isInGlobalCooldown(phone)) { stats.skipped_global_cooldown = (stats.skipped_global_cooldown || 0) + 1; continue; }
+  if (isInRivalNudgeWindow(phone)) { stats.skipped_rival_nudge = (stats.skipped_rival_nudge || 0) + 1; continue; }
   if (isBlacklisted(phone)) { stats.skipped_blacklist = (stats.skipped_blacklist || 0) + 1; continue; }
 
   const firstName = last.first_name || 'there';
@@ -235,6 +265,7 @@ const diag = [
   `• Skipped (no phone): ${stats.skipped_no_phone}`,
   `• Skipped (already sent previously): ${stats.skipped_already_sent || 0}`,
   `• Skipped (global 7d cooldown): ${stats.skipped_global_cooldown || 0}`,
+  `• Skipped (rival 30d — post_trial_nurture): ${stats.skipped_rival_nudge || 0}`,
   `• Too recent (just ordered): ${stats.too_recent}`,
   `• In reminder #1 window: ${stats.in_remind_1_window}`,
   `• Between windows: ${stats.between_windows}`,
