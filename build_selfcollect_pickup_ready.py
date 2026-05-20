@@ -146,7 +146,6 @@ return [{ json: base }]; // 0 matches
 """
 
 # ───────────────────────── Code: Build WA Message (happy path) ─────────────────────────
-# Template is PLACEHOLDER per user. Refine when ready.
 BUILD_WA_MSG_JS = r"""const ctx = $input.first().json;
 const o = ctx.order;
 
@@ -160,12 +159,11 @@ const lines = [
   `❄️ Look for the pack labeled with your order ID *${o.order_name}* in the *WHITE freezer*`,
   `ℹ️ Please skip the *ORANGE freezer*, it's not part of the pickup`,
   '',
-  `Everything is clearly labeled so it should be straightforward 👌`,
-  '',
   `A few quick notes:`,
-  `🙏 Please try to pick up within 7 days, we have limited storage space`,
-  `✅ Pickup anytime, the freezer is accessible 24/7`,
-  `✅ The pack itself is a cooler bag, just try to get it into your freezer within 2-3 hours of pickup`,
+  `🙏 *Please collect within 3 days of this message.* Our freezer at the pickup point is small, so we really need every pack out fast to make room for the next batch`,
+  `💬 If 3 days doesn't work for you, just reply and let us know, we'll figure something out together`,
+  `✅ The freezer is accessible 24/7, pop by anytime`,
+  `✅ The pack itself is a cooler bag, just get it into your home freezer within 2-3 hours of pickup`,
   `✅ Once frozen, good for up to 1 year`,
 ];
 
