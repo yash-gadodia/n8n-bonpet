@@ -3,7 +3,7 @@
 with Shopify revenue, top-5 spend categories, account balances, and MTD forecast.
 
 Triggers: Mon 9:30 SGT (weekly), 1st of month 9:30 SGT (monthly), manual webhook.
-Recipients: 4 (Yash, Nicolas, Bon Pet official, Shaun — Rachel excluded per user).
+Recipients: 2 (Yash, Nicolas). Rachel, Bari, Bon Pet official, Shaun excluded per user.
 """
 import json
 import uuid
@@ -44,7 +44,6 @@ WA_KEY = subprocess.check_output(["security","find-generic-password","-a","thebo
 RECIPIENTS = [
     "+6581394225",  # Yash
     "+6598531677",  # Nicolas
-    "+6581114800",  # Shaun
 ]
 
 SET_RANGE_JS = r"""// Compute date range based on which trigger fired + emit shared context

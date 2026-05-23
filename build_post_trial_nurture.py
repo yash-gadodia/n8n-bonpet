@@ -46,7 +46,6 @@ TEAM_PHONES = [
     "+6598531677",  # Nicolas
     "+6590108515",  # Bon Pet official
     "+6587993341",  # Rachel
-    "+6581114800",  # Shaun
     "+6282240119788",  # Bari
 ]
 
@@ -63,7 +62,7 @@ CODE_JS = r"""// Post-Trial Nurture v2 — 3-burst pattern (msg1 hello, msg2 fou
 // Reads orders sheet for trial pack buyers at days 7/14/21.
 const DRY_RUN = false;
 const YASH_PHONE = '+6581394225';
-const TEAM_PHONES = ['+6581394225', '+6598531677', '+6590108515', '+6587993341', '+6581114800', '+6282240119788'];
+const TEAM_PHONES = ['+6581394225', '+6598531677', '+6590108515', '+6587993341', '+6282240119788'];
 
 // Trial pack SKU detection (from CLAUDE.md product catalog)
 function isTrialPack(sku, title) {

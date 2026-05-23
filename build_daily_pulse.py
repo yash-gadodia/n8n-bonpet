@@ -33,7 +33,6 @@ RECIPIENTS = [
     "+6598531677",  # Nicolas
     "+6590108515",  # Bon Pet official
     "+6587993341",  # Rachel
-    "+6581114800",  # Shaun
 ]
 
 DATE_RANGES_JS = r"""// Compute SGT date ranges and labels for Daily Pulse
