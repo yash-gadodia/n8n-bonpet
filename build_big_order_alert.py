@@ -8,10 +8,10 @@ import uuid
 import os
 import urllib.request
 import urllib.error
+import subprocess
 
 from _notify import telegram_send_node
 from _sent_log import (
-import subprocess
     read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
 
@@ -38,7 +38,6 @@ RECIPIENTS = [
     "+6598531677",     # Nicolas
     "+6590108515",     # Bon Pet official
     "+6587993341",     # Rachel
-    "+6581114800",     # Shaun
     "+6282240119788",  # Bari (CS)
 ]
 

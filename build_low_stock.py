@@ -24,7 +24,6 @@ RECIPIENTS = [
     "+6598531677",  # Nicolas
     "+6590108515",  # Bon Pet official
     "+6587993341",  # Rachel
-    "+6581114800",  # Shaun
     "+6282240119788",  # Bari (CS agent, ID)
 ]
 
