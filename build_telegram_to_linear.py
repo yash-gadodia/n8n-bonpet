@@ -34,6 +34,10 @@ ANTHROPIC_KEY = subprocess.check_output(
 WMS_PAT = subprocess.check_output(
     ["security", "find-generic-password", "-a", "thebonpet", "-s", "wms-pat", "-w"]
 ).decode().strip()
+SHOPIFY_ADMIN_TOKEN = subprocess.check_output(
+    ["security", "find-generic-password", "-s", "shopify-bonpet-admin-token", "-w"]
+).decode().strip()
+SHOPIFY_STORE_DOMAIN = "d2ac44-d5.myshopify.com"
 
 LINEAR_TBP_TEAM_ID = "12118ee6-e5f2-4d01-98a4-54c9ff5c86f4"
 LINEAR_BACKLOG_STATE_ID = "8c7d9052-a913-4871-b7a1-b5fac536c3dc"
@@ -164,6 +168,14 @@ if (isPrivate && startCmds.test(cleaned)) {
   }];
 }
 
+// CONTINUATION: if this message is a reply to a bot "🤔 Need a bit more" prompt,
+// capture the bot's prior text so Claude can merge the partial fields with this reply.
+let continuation_of = null;
+const rtm = msg.reply_to_message;
+if (rtm && rtm.from && rtm.from.is_bot && rtm.text && rtm.text.startsWith('🤔 Need a bit more')) {
+  continuation_of = rtm.text;
+}
+
 return [{
   json: {
     text: cleaned || '(empty)',
@@ -175,6 +187,7 @@ return [{
     sender_username: (msg.from && msg.from.username) || null,
     sender_id: msg.from && msg.from.id,
     chat_title: (msg.chat && msg.chat.title) || '',
+    continuation_of,
   }
 }];
 """.replace("__BOT_USERNAME__", TELEGRAM_BOT_USERNAME)
@@ -199,13 +212,19 @@ Classify the message and respond with ONLY valid JSON.
 
 Schema:
 {
-  "action": "create" | "summary" | "update" | "help" | "packlist" | "send_pickup_wa",
-  // For "create" — always include title/description/category/priority; assignee is optional:
+  "action": "create" | "clarify" | "summary" | "update" | "help" | "packlist" | "send_pickup_wa",
+  // For "create" — title, assignee, AND priority must all be clearly present in the user's message.
+  // Description is OPTIONAL — if the user didn't write one, set description: null (the title is used as the description).
+  // If ANY of {title, assignee, priority} is missing, return action: "clarify" with a "missing" array instead.
   "title": "<= 70 chars, action-oriented, no trailing period",
-  "description": "1-2 sentences",
+  "description": "1-2 sentences if the user wrote one; null otherwise",
   "category": "Dev" | "Marketing" | "Ops" | "BD" | "Customer Support" | "OMS" | "Whatsapp" | "Other",
   "priority": 0|1|2|3|4,
   "assignee": "rachel" | "shaun" | "nicolas" | "yash" | null,
+  // For "clarify" — return when the user wanted to create a ticket but one or more REQUIRED fields is missing.
+  // Required fields are: title, assignee, priority. Description is NOT required.
+  // Include whatever fields WERE clear (or null if not). List the missing field names in "missing".
+  "missing": ["title" | "assignee" | "priority", ...],
   // For "summary" — optional filter:
   "filter": { "category": "...", "stale": true, "assignee": "first name or email", "unassigned": true },
   // For "packlist" — optional filter:
@@ -225,13 +244,15 @@ Schema:
 }
 
 Routing:
-- "send_pickup_wa" when user wants to SEND THE PICKUP-READY WHATSAPP TEMPLATE to customers whose self-collect orders are packed/ready. This fans out the WA + auto-fulfills OMS for ALL unfulfilled self-collect orders — fires IMMEDIATELY, no confirm step. Triggers:
+- "send_pickup_wa" when user wants to MARK SELF-COLLECT ORDERS AS PACKED / fulfil them in OMS / send the pickup-ready WhatsApp. All these mean the same end-to-end flow: mark fulfilled in OMS + send WA template to the customer(s). Fires IMMEDIATELY, no confirm step. Triggers (any of these → send_pickup_wa, NOT clarify, NOT create):
+   - "mark order N as packed", "mark #N as packed", "mark N packed", "N is packed", "pack #N", "pls mark order N as packed"
+   - "mark order N as fulfilled", "fulfil order N", "fulfill #N", "close order N"
    - "fire wa notif", "send wa notif", "send the wa notif", "fire the wa"
    - "fire whatsapp notif for pickup ready", "send whatsapp notification for all self collection orders"
    - "send pickup ready WAs", "blast pickup ready", "fire pickup ready notifs"
    - "let customers know their orders are ready", "tell customers to pick up"
    - "orders are packed, fire wa", "all packed send wa", "fire it", "send it for all pending pickup"
-   - This is the DEFAULT meaning of "send wa notif" / "fire wa" in this chat — there is no other generic-WA broadcast intent exposed here. If a user says anything like "send wa notif" / "fire wa" / similar, this is the intent.
+   - This is the DEFAULT meaning of "send wa notif" / "fire wa" / "mark as packed" in this chat. ANY message about marking a self-collect order as packed/fulfilled is this intent — do NOT route to "clarify" or "create".
    - **order_numbers extraction:** If the user names specific order numbers (e.g. "#3299", "3300"), populate "order_numbers" with those as integers (no # prefix). The fire branch will filter the WMS list to just those orders.
        - "send pickup ready to #3299 and #3300"      → order_numbers: [3299, 3300]
        - "fire wa to 3298, 3300, 3302"               → order_numbers: [3298, 3300, 3302]
@@ -261,13 +282,26 @@ Routing:
    - If user says just a number ("close 23"), set identifier as "TBP-23"
 - "summary" when user ASKS about LINEAR TASKS/TICKETS ("what's open?", "show me dev tasks", "what's stale?", "what is rachel working on?", "summarise tasks", "list backlog"). DO NOT use "summary" for questions about orders/packing/shipping — use "packlist" for those.
 - "help" when user is asking what the bot can do, or the message is empty/unclear/just hi
-- "create" by default — when the user is describing a NEW task or thing to do
-   - If the user says "assign to X" / "for X" / "give to X" / "X to ..." in the same message, set assignee to that person (rachel|shaun|nicolas|yash). Otherwise assignee = null.
-   - Examples:
-     - "make a tix assign yash to fix homepage"      → action: create, assignee: "yash"
-     - "for nicolas: order packaging tomorrow"        → action: create, assignee: "nicolas"
-     - "rachel pls draft IG caption for sous vide"    → action: create, assignee: "rachel"
-     - "fix the abandoned cart job"                   → action: create, assignee: null
+- IMPORTANT — "clarify" / "create" are ONLY for filing new Linear tickets. If the user is talking about a real Shopify/OMS order ("order #N", "order N", "mark N packed", "fulfil N", "ship N"), route to "packlist" or "send_pickup_wa", NEVER to "clarify" or "create".
+
+- "create" — file a new Linear ticket. REQUIRES all three of these to be clearly present in the user's message:
+   1. title — derivable from the message (≤70 chars, action-oriented)
+   2. assignee — user explicitly names one of rachel | shaun | nicolas | yash (or says "me"/"mine" → resolves to sender's Linear handle if known)
+   3. priority — user explicitly signals urgency (see Priority cues below). NO silent default.
+   Description is OPTIONAL — if the user wrote extra context, capture it; otherwise set description: null.
+   If ANY of {title, assignee, priority} is missing, use "clarify" — do NOT default, do NOT create.
+   Examples (all three required present → create):
+     - "urgent tix for nicolas to order packaging tomorrow, we're running low on the 300g pouches"  → create, assignee: "nicolas", priority: 1, description: "we're running low on the 300g pouches"
+     - "rachel pls draft IG caption for sous vide launch this week, important"                       → create, assignee: "rachel", priority: 2, description: null
+     - "assign yash to fix the abandoned cart job, normal priority"                                   → create, assignee: "yash", priority: 3, description: null
+     - "make tix assign nicolas urgent - self collection orders not showing on OMS"                   → create, assignee: "nicolas", priority: 1, description: null  (title alone is enough; no separate description needed)
+
+- "clarify" — user wanted to file a ticket but one or more REQUIRED fields is missing. Required = title, assignee, priority. Description is NOT in the missing list. Return whatever fields ARE clear (or null). Examples:
+     - "make a tix to fix homepage"                                → clarify, missing: ["assignee","priority"]
+     - "assign yash to update IG bio"                              → clarify, missing: ["priority"]
+     - "urgent: fix homepage"                                      → clarify, missing: ["assignee"]
+     - "make tix assign nicolas - self collection orders not showing on OMS"  → clarify, missing: ["priority"]
+     - "make a tix"                                                → clarify, missing: ["title","assignee","priority"]
 
 Categories for "create" / "update":
 - Dev: code, n8n workflows, website, automation, bugs, scripts
@@ -279,18 +313,38 @@ Categories for "create" / "update":
 - Whatsapp: WA broadcasts, templates, customer messaging
 - Other: anything else
 
-Priority cues: "urgent"/"asap"/"now" → 1; "important"/"high" → 2; default → 3; "low"/"someday" → 4.
+Priority cues (user must explicitly signal one for a create — otherwise → clarify):
+- "urgent"/"asap"/"now"/"emergency"/"blocker"   → 1
+- "important"/"high"/"high priority"             → 2
+- "normal"/"medium"/"regular"                    → 3
+- "low"/"someday"/"whenever"/"nice to have"      → 4
+- (none of the above said) → priority is MISSING — return clarify.
 
 For "summary": parse "dev"/"marketing"/etc → filter.category. "stale"/"old" → filter.stale=true. Names like "rachel"/"shaun"/"nicolas"/"yash" → filter.assignee. Phrases like "unassigned", "no owner", "no one", "nobody", "orphan", "without an owner", "not assigned" → filter.unassigned=true (and DO NOT set filter.assignee in this case).
 
 Self-reference: if the message uses "my", "mine", "me", or "i" (e.g. "what's mine?", "my open tix", "what am i working on", "assign to me"), resolve to the sender's Linear handle shown in "Sender Linear handle:" below. If no Linear handle is shown for the sender, omit filter.assignee for summaries and omit assignee for creates.
+
+Continuation handling: if a "Prior bot ask" block is shown below, the user is replying to a previous "🤔 Need a bit more" clarify prompt. Parse the ✅ lines in the prior ask to recover already-known fields (Title, Assignee, Priority/Urgency), then treat the new Message as filling in whatever was previously marked ❓. Merge them and re-emit. If all three required fields (title, assignee, priority) are now present, return action: "create". If still incomplete, return action: "clarify" with the remaining missing fields. Examples:
+  Prior ask had:  ✅ Title: fix homepage, ✅ Assignee: nicolas, ❓ Urgency
+  New message:    "urgent"                                            → create, title: "fix homepage", assignee: "nicolas", priority: 1
+  Prior ask had:  ✅ Title: order packaging, ❓ Assignee, ❓ Urgency
+  New message:    "nicolas, high"                                     → create, title: "order packaging", assignee: "nicolas", priority: 2
+  Prior ask had:  ❓ Title, ❓ Assignee, ❓ Urgency
+  New message:    "urgent for shaun"                                  → clarify, missing: ["title"]   (assignee + priority now known)
 
 Output ONLY JSON. No preamble. No code fences.`;
 
 const senderLine = senderLinear
   ? `From: ${ctx.sender_name}\nSender Linear handle: ${senderLinear}`
   : `From: ${ctx.sender_name}\nSender Linear handle: (unknown — do not infer)`;
-const user = `${senderLine}\nMessage: ${ctx.text}`;
+
+// CONTINUATION: user is replying to a previous "🤔 Need a bit more" clarify prompt.
+// Pass that prior text so Claude can merge the partial fields with the new reply.
+const continuationLine = ctx.continuation_of
+  ? `\nPrior bot ask (merge any ✅ fields with the new reply below):\n${ctx.continuation_of}`
+  : '';
+
+const user = `${senderLine}${continuationLine}\nMessage: ${ctx.text}`;
 
 return [{
   json: {
@@ -342,7 +396,7 @@ const labelIds = labels[p.category] ? [labels[p.category]] : [];
 const assigneeName = p.assignee ? String(p.assignee).toLowerCase().replace(/^@/, '') : null;
 const assigneeId = assigneeName ? (users[assigneeName] || null) : null;
 const description = [
-  p.description || '',
+  p.description || p.title || '',
   '',
   `_Filed by **${ctx.sender_name}** via Telegram on ${new Date().toISOString().slice(0,10)}_`,
   `_Original: "${ctx.raw_text.slice(0, 300)}"_`,
@@ -381,6 +435,50 @@ return [{ json: {
   message_thread_id: ticket._ctx.message_thread_id,
   reply_to_message_id: ticket._ctx.reply_to_message_id,
   text,
+} }];
+"""
+
+
+# ─────────────────────── CLARIFY branch ───────────────────────────────────
+CLARIFY_FORMAT_JS = r"""// Build Telegram reply asking for missing ticket fields
+const ctx = $('Parse Intent').first().json._ctx;
+const p = $('Parse Intent').first().json.parsed || {};
+// Only accept real required-field names. Anything else (e.g. Claude shoving a
+// sentence into "missing") gets dropped; if nothing valid remains, ask for all 3.
+const VALID = new Set(['title','assignee','priority']);
+let missing = Array.isArray(p.missing) ? p.missing.filter(k => VALID.has(k)) : [];
+if (!missing.length) missing = ['title','assignee','priority'];
+
+const LABEL = {
+  title:    'Title',
+  assignee: 'Assignee (rachel | shaun | nicolas | yash)',
+  priority: 'Urgency (urgent | high | normal | low)',
+};
+const have = {
+  title:    p.title || null,
+  assignee: p.assignee || null,
+  priority: (typeof p.priority === 'number') ? p.priority : null,
+};
+const PRIORITY_WORD = {1:'urgent', 2:'high', 3:'normal', 4:'low', 0:'no priority'};
+
+const lines = ['🤔 Need a bit more before I file this:'];
+for (const k of ['title','assignee','priority']) {
+  if (missing.includes(k)) {
+    lines.push(`  • ❓ ${LABEL[k]}`);
+  } else {
+    let shown = have[k];
+    if (k === 'priority' && shown !== null) shown = PRIORITY_WORD[shown] || shown;
+    if (shown) lines.push(`  • ✅ ${LABEL[k].split(' (')[0]}: ${shown}`);
+  }
+}
+lines.push('');
+lines.push('Reply with the missing bits and I\'ll file it.');
+
+return [{ json: {
+  chat_id: ctx.chat_id,
+  message_thread_id: ctx.message_thread_id,
+  reply_to_message_id: ctx.reply_to_message_id,
+  text: lines.join('\n'),
 } }];
 """
 
@@ -616,9 +714,33 @@ const intentParsed = $('Parse Intent').first().json.parsed || {};
 const pf = intentParsed.pack_filter || {};
 const selfOnly = pf.self_collect_only === true;
 
-const resp = $input.first().json;
+// OMS unfulfilled orders come from "Fetch WMS Orders".
+const resp = $('Fetch WMS Orders').first().json;
 let orders = (resp && resp.orders) || [];
 const totalAll = (resp && resp.total != null) ? resp.total : orders.length;
+
+// Sync-drift check: latest Shopify order # vs latest order in OMS (any status).
+// If Shopify has a newer order than anything in the OMS, surface that — most likely
+// the Shopify→OMS ingest is lagging or broken.
+let syncWarning = null;
+try {
+  const shopResp = $input.first().json;
+  const shopLatest = (shopResp && shopResp.orders && shopResp.orders[0]) || null;
+  if (shopLatest && shopLatest.name) {
+    const shopNum = parseInt(String(shopLatest.name).replace(/^#/, ''), 10);
+    // Highest order_name across the WMS unfulfilled list (cheap proxy for "latest OMS knows about").
+    let omsMax = 0;
+    for (const o of orders) {
+      const n = parseInt(String(o.order_name || '').replace(/^#/, ''), 10);
+      if (Number.isFinite(n) && n > omsMax) omsMax = n;
+    }
+    if (Number.isFinite(shopNum) && omsMax > 0 && shopNum > omsMax) {
+      const gap = shopNum - omsMax;
+      const shopMethod = (shopLatest.shipping_lines && shopLatest.shipping_lines[0] && shopLatest.shipping_lines[0].title) || '?';
+      syncWarning = `⚠️ *Shopify→OMS sync drift* · latest Shopify #${shopNum} (${shopMethod}) · OMS only up to #${omsMax} · gap ${gap}. Ping Shaun.`;
+    }
+  }
+} catch (e) { /* best-effort; don't break the packlist */ }
 
 if (selfOnly) {
   orders = orders.filter(o => String(o.delivery_method || '').toUpperCase() === 'SELF_COLLECTION');
@@ -665,6 +787,9 @@ for (const o of orders) {
 const lines = [];
 const heading = selfOnly ? '📦 *Unfulfilled Self-Collection Orders*' : '📦 *Unfulfilled Orders — Packlist*';
 lines.push(heading);
+if (syncWarning) {
+  lines.push(syncWarning);
+}
 
 if (orders.length === 0) {
   lines.push(selfOnly
@@ -1002,7 +1127,7 @@ def build():
         }
     switch = {
         "parameters": {
-            "rules": {"values": [rule("create"), rule("summary"), rule("update"), rule("help"), rule("packlist"), rule("send_pickup_wa")]},
+            "rules": {"values": [rule("create"), rule("summary"), rule("update"), rule("help"), rule("packlist"), rule("send_pickup_wa"), rule("clarify")]},
             "options": {"fallbackOutput": "extra", "renameFallbackOutput": "create"},
         },
         "id": uid(), "name": "Route Intent", "type": "n8n-nodes-base.switch",
@@ -1136,6 +1261,13 @@ def build():
         "typeVersion": 2, "position": [1440, 800],
     }
 
+    # CLARIFY branch — user wanted a create but a required field is missing
+    clarify_format = {
+        "parameters": {"jsCode": CLARIFY_FORMAT_JS},
+        "id": uid(), "name": "Format Clarify", "type": "n8n-nodes-base.code",
+        "typeVersion": 2, "position": [1440, 900],
+    }
+
     # PACKLIST branch — query the live OMS for unfulfilled orders
     wms_fetch = {
         "parameters": {
@@ -1156,10 +1288,32 @@ def build():
         "id": uid(), "name": "Fetch WMS Orders", "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.2, "position": [1440, 1000],
     }
+    # After WMS fetch, also pull the latest Shopify order # so we can detect
+    # Shopify→OMS sync drift (e.g., new self-collect orders not yet ingested).
+    shopify_latest_fetch = {
+        "parameters": {
+            "method": "GET",
+            "url": f"https://{SHOPIFY_STORE_DOMAIN}/admin/api/2025-01/orders.json",
+            "sendQuery": True,
+            "queryParameters": {"parameters": [
+                {"name": "status", "value": "any"},
+                {"name": "limit", "value": "1"},
+                {"name": "fields", "value": "name,id,created_at,fulfillment_status,shipping_lines"},
+            ]},
+            "sendHeaders": True,
+            "headerParameters": {"parameters": [
+                {"name": "X-Shopify-Access-Token", "value": SHOPIFY_ADMIN_TOKEN},
+                {"name": "User-Agent", "value": UA},
+            ]},
+            "options": {},
+        },
+        "id": uid(), "name": "Fetch Shopify Latest", "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2, "position": [1680, 1000],
+    }
     packlist_format = {
         "parameters": {"jsCode": PACKLIST_FORMAT_JS},
         "id": uid(), "name": "Format Packlist", "type": "n8n-nodes-base.code",
-        "typeVersion": 2, "position": [1680, 1000],
+        "typeVersion": 2, "position": [1920, 1000],
     }
 
     # SEND_PICKUP_WA branch — fetch self-collect unfulfilled, fire immediately (no confirm gate)
@@ -1219,8 +1373,9 @@ def build():
              linear_fetch, summary_format,
              lookup_issue, build_update, linear_update, update_reply,
              help_format,
-             wms_fetch, packlist_format,
+             wms_fetch, shopify_latest_fetch, packlist_format,
              fetch_pickup_orders, fire_pickup_wa,
+             clarify_format,
              telegram_reply]
 
     connections = {
@@ -1237,7 +1392,7 @@ def build():
         build_claude["name"]:   {"main": [[{"node": claude_call["name"],   "type": "main", "index": 0}]]},
         claude_call["name"]:    {"main": [[{"node": parse_intent["name"],  "type": "main", "index": 0}]]},
         parse_intent["name"]:   {"main": [[{"node": switch["name"],        "type": "main", "index": 0}]]},
-        # Switch outputs: 0=create, 1=summary, 2=update, 3=help, 4=packlist, 5=send_pickup_wa (fallback → create)
+        # Switch outputs: 0=create, 1=summary, 2=update, 3=help, 4=packlist, 5=send_pickup_wa, 6=clarify (fallback → create)
         switch["name"]: {"main": [
             [{"node": build_mutation["name"],      "type": "main", "index": 0}],  # 0: create
             [{"node": linear_fetch["name"],        "type": "main", "index": 0}],  # 1: summary
@@ -1245,6 +1400,7 @@ def build():
             [{"node": help_format["name"],         "type": "main", "index": 0}],  # 3: help
             [{"node": wms_fetch["name"],           "type": "main", "index": 0}],  # 4: packlist
             [{"node": fetch_pickup_orders["name"], "type": "main", "index": 0}],  # 5: send_pickup_wa
+            [{"node": clarify_format["name"],      "type": "main", "index": 0}],  # 6: clarify
         ]},
         # CREATE
         build_mutation["name"]: {"main": [[{"node": linear_create["name"], "type": "main", "index": 0}]]},
@@ -1260,9 +1416,12 @@ def build():
         update_reply["name"]:   {"main": [[{"node": telegram_reply["name"],"type": "main", "index": 0}]]},
         # HELP
         help_format["name"]:    {"main": [[{"node": telegram_reply["name"],"type": "main", "index": 0}]]},
+        # CLARIFY
+        clarify_format["name"]: {"main": [[{"node": telegram_reply["name"],"type": "main", "index": 0}]]},
         # PACKLIST
-        wms_fetch["name"]:       {"main": [[{"node": packlist_format["name"], "type": "main", "index": 0}]]},
-        packlist_format["name"]: {"main": [[{"node": telegram_reply["name"],  "type": "main", "index": 0}]]},
+        wms_fetch["name"]:            {"main": [[{"node": shopify_latest_fetch["name"], "type": "main", "index": 0}]]},
+        shopify_latest_fetch["name"]: {"main": [[{"node": packlist_format["name"],      "type": "main", "index": 0}]]},
+        packlist_format["name"]:      {"main": [[{"node": telegram_reply["name"],       "type": "main", "index": 0}]]},
         # SEND_PICKUP_WA — fire immediately, no confirm gate
         fetch_pickup_orders["name"]: {"main": [[{"node": fire_pickup_wa["name"],  "type": "main", "index": 0}]]},
         fire_pickup_wa["name"]:      {"main": [[{"node": telegram_reply["name"], "type": "main", "index": 0}]]},
