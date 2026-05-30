@@ -65,11 +65,13 @@ LINEAR_USER_IDS = {
     "shaun":    "1f10cd24-6dd4-4cf1-8e42-eb2a53889d1e",
     "nicolas":  "58ae415c-a03c-454f-8e5a-00dcebafa3d9",
     "yash":     "c3231b5f-8db1-4c15-8b63-35fb3e980e86",
+    "danielle": "fb5bb4e9-11b5-4f22-b5a9-1991fec7d90c",
     # email aliases
     "rachelliewruiqi@gmail.com": "a61c170d-188f-485e-805c-16ce1aef9e13",
     "gotchykid@gmail.com":       "1f10cd24-6dd4-4cf1-8e42-eb2a53889d1e",
     "nicolas@thebonpet.com":     "58ae415c-a03c-454f-8e5a-00dcebafa3d9",
     "yash@thebonpet.com":        "c3231b5f-8db1-4c15-8b63-35fb3e980e86",
+    "danielleona.p@gmail.com":   "fb5bb4e9-11b5-4f22-b5a9-1991fec7d90c",
 }
 ERROR_ALERTER_ID = "c3Vk2nt9WINzp9GH"
 PICKUP_READY_WEBHOOK = "https://n8n.thebonpet.com/webhook/selfcollect-pickup-ready-3f9c1a"
@@ -220,7 +222,7 @@ Schema:
   "description": "1-2 sentences if the user wrote one; null otherwise",
   "category": "Dev" | "Marketing" | "Ops" | "BD" | "Customer Support" | "OMS" | "Whatsapp" | "Other",
   "priority": 0|1|2|3|4,
-  "assignee": "rachel" | "shaun" | "nicolas" | "yash" | null,
+  "assignee": "rachel" | "shaun" | "nicolas" | "yash" | "danielle" | null,
   // For "clarify" — return when the user wanted to create a ticket but one or more REQUIRED fields is missing.
   // Required fields are: title, assignee, priority. Description is NOT required.
   // Include whatever fields WERE clear (or null if not). List the missing field names in "missing".
@@ -237,7 +239,7 @@ Schema:
   "identifier": "TBP-23",
   "updates": {
     "state": "Done" | "In Progress" | "Backlog" | "Todo" | "In Review" | "Canceled" | "Duplicate",
-    "assignee": "rachel" | "shaun" | "nicolas" | "yash",
+    "assignee": "rachel" | "shaun" | "nicolas" | "yash" | "danielle",
     "priority": 0|1|2|3|4,
     "category": "Dev" | "Marketing" | "Ops" | "BD" | "Customer Support" | "OMS" | "Whatsapp" | "Other"
   }
@@ -286,7 +288,7 @@ Routing:
 
 - "create" — file a new Linear ticket. REQUIRES all three of these to be clearly present in the user's message:
    1. title — derivable from the message (≤70 chars, action-oriented)
-   2. assignee — user explicitly names one of rachel | shaun | nicolas | yash (or says "me"/"mine" → resolves to sender's Linear handle if known)
+   2. assignee — user explicitly names one of rachel | shaun | nicolas | yash | danielle (or says "me"/"mine" → resolves to sender's Linear handle if known)
    3. priority — user explicitly signals urgency (see Priority cues below). NO silent default.
    Description is OPTIONAL — if the user wrote extra context, capture it; otherwise set description: null.
    If ANY of {title, assignee, priority} is missing, use "clarify" — do NOT default, do NOT create.
@@ -320,7 +322,7 @@ Priority cues (user must explicitly signal one for a create — otherwise → cl
 - "low"/"someday"/"whenever"/"nice to have"      → 4
 - (none of the above said) → priority is MISSING — return clarify.
 
-For "summary": parse "dev"/"marketing"/etc → filter.category. "stale"/"old" → filter.stale=true. Names like "rachel"/"shaun"/"nicolas"/"yash" → filter.assignee. Phrases like "unassigned", "no owner", "no one", "nobody", "orphan", "without an owner", "not assigned" → filter.unassigned=true (and DO NOT set filter.assignee in this case).
+For "summary": parse "dev"/"marketing"/etc → filter.category. "stale"/"old" → filter.stale=true. Names like "rachel"/"shaun"/"nicolas"/"yash"/"danielle" → filter.assignee. Phrases like "unassigned", "no owner", "no one", "nobody", "orphan", "without an owner", "not assigned" → filter.unassigned=true (and DO NOT set filter.assignee in this case).
 
 Self-reference: if the message uses "my", "mine", "me", or "i" (e.g. "what's mine?", "my open tix", "what am i working on", "assign to me"), resolve to the sender's Linear handle shown in "Sender Linear handle:" below. If no Linear handle is shown for the sender, omit filter.assignee for summaries and omit assignee for creates.
 
@@ -451,7 +453,7 @@ if (!missing.length) missing = ['title','assignee','priority'];
 
 const LABEL = {
   title:    'Title',
-  assignee: 'Assignee (rachel | shaun | nicolas | yash)',
+  assignee: 'Assignee (rachel | shaun | nicolas | yash | danielle)',
   priority: 'Urgency (urgent | high | normal | low)',
 };
 const have = {
