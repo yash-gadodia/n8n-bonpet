@@ -166,7 +166,7 @@ def append_node():
                 "cachedResultUrl": f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit",
             },
             "sheetName": {
-                "__rl": True, "value": "gid=0", "mode": "list",
+                "__rl": True, "value": 0, "mode": "list",
                 "cachedResultName": "orders",
                 "cachedResultUrl": f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid=0",
             },

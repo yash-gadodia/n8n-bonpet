@@ -600,7 +600,14 @@ def split_customer_filter_dry_js(dry_run: bool):
 def split_dedup_log_js():
     # Only LIVE sends get logged to dedup + global sent log.
     # DRY items are skipped from logging so we can re-run DRY freely.
-    return r"""return $input.all().filter(it => !it.json.is_summary && it.json.dry_run !== 'true');
+    #
+    # CRITICAL: reach back to 'Pick Customers' (the node that fed Send WA) — NOT $input.all().
+    # Send WA is an httpRequest whose response REPLACES the item json with {success, message_id,
+    # message}, stripping customer_id/contract_id/phone/sent_at. Logging $input.all() here wrote
+    # blank dedup rows, so 'alreadyReactivated' was always empty and the same paused/cancelled
+    # customers re-qualified every day. This is the same dedup-blanking bug class as the 2026-05
+    # winback spam. See feedback_n8n_http_input_passthrough memory.
+    return r"""return $('Pick Customers').all().filter(it => !it.json.is_summary && it.json.dry_run !== 'true');
 """
 
 

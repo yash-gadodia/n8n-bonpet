@@ -529,6 +529,9 @@ def build():
         "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": [1680, 800],
         "credentials": {"googleSheetsOAuth2Api": {"id": GS_CRED_ID, "name": GS_CRED_NAME}},
+        # A throw here must not halt the run before the sibling global-sent log writes —
+        # uniform with every other dedup append in the fleet (the winback cascade lesson).
+        "onError": "continueRegularOutput",
     }
 
     team_sends = [

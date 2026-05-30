@@ -227,9 +227,10 @@ const header = [{ json: { is_header: true, phone: YASH_PHONE, target_phone: YASH
 return header.concat(eligible);
 """
 
-FORMAT_MESSAGE_JS = r"""// Winback v2 — 3-burst pattern (msg1 hello, msg2 founder, msg3 question + soft link).
-// Each eligible customer emits 3 items in burst order. Send WA processes sequentially via
-// 2s batching. Drop Header filters seq===3 so per-customer dedup logs only once per customer.
+FORMAT_MESSAGE_JS = r"""// Winback v3 — ONE message per customer (no 3-burst). One send => one dedup-log row,
+// so there is no partial-burst state where some messages send but the log never writes.
+// Drop Header reaches back to THIS node (not $input.all()) so phone/customer fields
+// survive the HTTP send and the dedup log records a real phone + sent_at.
 const DRY_RUN = __DRY_RUN__;
 const YASH_PHONE = '+6581394225';
 
@@ -241,10 +242,7 @@ for (const it of $input.all()) {
     continue;
   }
   const firstName = j.first_name || 'pawrent';
-  const msg1 = `hihi 🐾`;
-  const msg2 = `yash & nic here from bon pet, been a while! 💛`;
-  const msg3 = `just checking in, how's your furkid? we recently launched pork for dogs 🍖 + duck for cats 🦆, peek if curious 🐾 https://thebonpet.com`;
-  const bursts = [msg1, msg2, msg3];
+  const msg = `hihi 🐾 yash & nic here from The Bon Pet, been a while! 💛 how's your furkid? we just launched pork for dogs 🍖 + duck for cats 🦆, peek if curious 🐾 https://thebonpet.com`;
 
   const baseFields = {
     email: j.email,
@@ -260,21 +258,14 @@ for (const it of $input.all()) {
     is_header: false,
   };
 
-  for (let i = 0; i < 3; i++) {
-    const seq = i + 1;
-    const liveMsg = bursts[i];
-    const dryPrefix = (seq === 1)
-      ? `🧪 [DRY · WB → ${firstName} ${j.phone} · ${seq}/3 · days_since=${j.days_since_last_order}]\n`
-      : `[${seq}/3]\n`;
-    out.push({
-      json: {
-        ...baseFields,
-        seq: seq,
-        target_phone: DRY_RUN ? YASH_PHONE : j.phone,
-        message: DRY_RUN ? dryPrefix + liveMsg : liveMsg,
-      }
-    });
-  }
+  const dryPrefix = `🧪 [DRY · WB → ${firstName} ${j.phone} · days_since=${j.days_since_last_order}]\n`;
+  out.push({
+    json: {
+      ...baseFields,
+      target_phone: DRY_RUN ? YASH_PHONE : j.phone,
+      message: DRY_RUN ? dryPrefix + msg : msg,
+    }
+  });
 }
 return out;
 """
@@ -381,7 +372,7 @@ def append_sent_node(pos):
                 "cachedResultUrl": f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit",
             },
             "sheetName": {
-                "__rl": True, "value": f"gid={WINBACK_SENT_TAB_GID}", "mode": "list",
+                "__rl": True, "value": WINBACK_SENT_TAB_GID, "mode": "list",
                 "cachedResultUrl": f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid={WINBACK_SENT_TAB_GID}",
             },
             "columns": {
@@ -407,6 +398,10 @@ def append_sent_node(pos):
         "position": pos,
         "credentials": {"googleSheetsOAuth2Api": {"id": GS_CRED_ID, "name": GS_CRED_NAME}},
         "disabled": SEND_WA_DISABLED or DRY_RUN,
+        # If this append ever throws (transient sheet error), do NOT halt the run —
+        # the sibling Log Global Sent must still record the send so global cooldown
+        # caps re-sends. A halt here is exactly what let the 2026-05 spam recur.
+        "onError": "continueRegularOutput",
     }
 
 
@@ -453,9 +448,9 @@ def build():
     send       = send_wa_node("Send Winback WA",      [1200, 500])
     # Reaches back to Format Message (NOT $input.all()) so phone/customer fields survive
     # the HTTP Send WA response replacement — see feedback_n8n_http_input_passthrough memory.
-    # Filters seq===3 so dedup-log writes only once per customer (not 3× per burst).
+    # One item per customer now (single message), so just drop the header row.
     drop_hdr   = code_node("Drop Header",             [1440, 500],
-                           "return $('Format Message').all().filter(it => !it.json.is_header && it.json.seq === 3);")
+                           "return $('Format Message').all().filter(it => !it.json.is_header);")
     log_sent   = append_sent_node([1680, 500])
     log_global = append_global_sent_log_node([1920, 500])
     log_global["disabled"] = SEND_WA_DISABLED or DRY_RUN
