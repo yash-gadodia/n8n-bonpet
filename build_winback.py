@@ -13,7 +13,7 @@ from _sent_log import (
     read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
 from _blacklist import BLACKLIST_JS_SNIPPET
-from _notify import telegram_send_node
+from _notify import telegram_send_node, telegram_launchcycle_node
 import subprocess
 
 API = "https://n8n.thebonpet.com/api/v1"
@@ -50,6 +50,8 @@ TEAM_RECIPIENTS = [
     ("Bon Pet official", "+6590108515"),
     ("Rachel",           "+6587993341"),
     ("Bari",             "+6282240119788"),
+    ("Siva",             "+6583513308"),    # Launch Cycle agency - external
+    ("Raghav",           "+6588146498"),    # Launch Cycle agency - external
 ]
 
 
@@ -458,6 +460,7 @@ def build():
     pass_header = code_node("Pass Header Only", [1200, 700],
                             "return $input.all().filter(it => it.json.is_header === true);")
     send_telegram = telegram_send_node("Send Telegram Weslee", [1440, 700])
+    send_telegram_lc = telegram_launchcycle_node("Send Telegram LaunchCycle", [1440, 800])
 
     team_wa_sends = [
         team_wa_node(f"Team WA {name}", [1440, 900 + i * 100], phone)
@@ -466,7 +469,7 @@ def build():
 
     nodes = [schedule, manual, orders, customers, winback_sent, read_global, merge,
              compute, format_msg, send, drop_hdr, log_sent, log_global,
-             pass_header, send_telegram, *team_wa_sends]
+             pass_header, send_telegram, send_telegram_lc, *team_wa_sends]
 
     connections = {
         schedule["name"]:  {"main": [[
@@ -501,6 +504,7 @@ def build():
         ]]},
         pass_header["name"]:  {"main": [[
             {"node": send_telegram["name"], "type": "main", "index": 0},
+            {"node": send_telegram_lc["name"], "type": "main", "index": 0},
             *[{"node": n["name"], "type": "main", "index": 0} for n in team_wa_sends],
         ]]},
     }

@@ -13,7 +13,7 @@ import os
 import urllib.request
 import urllib.error
 
-from _notify import telegram_send_node
+from _notify import telegram_send_node, telegram_launchcycle_node
 import subprocess
 from _sent_log import (
     read_global_sent_log_node, filter_recent_sent_log_node,
@@ -51,6 +51,8 @@ RECIPIENTS = [
     "+6590108515",  # Bon Pet official
     "+6587993341",  # Rachel
     "+6282240119788",  # Bari (CS agent, ID)
+    "+6583513308",  # Siva (Launch Cycle agency - external)
+    "+6588146498",  # Raghav (Launch Cycle agency - external)
 ]
 
 PARSE_REVIEWS_JS = r"""// Parse Google Places API response → per-review items
@@ -541,6 +543,9 @@ def build():
     telegram_send = telegram_send_node(
         "Send Telegram Weslee", [1680, 50 + len(RECIPIENTS) * 60]
     )
+    telegram_lc = telegram_launchcycle_node(
+        "Send Telegram LaunchCycle", [1680, 150 + len(RECIPIENTS) * 60]
+    )
     send_thanks  = customer_wa_node("Send Customer Thanks",  [1680, 400])
     send_apology = customer_wa_node("Send Customer Apology", [1680, 600])
     log_global   = append_global_sent_log_node([1920, 500])
@@ -549,7 +554,7 @@ def build():
              read_global, filter_global, merge,
              decide, if_team, if_thanks, if_apology,
              format_team, format_thanks, format_apology,
-             append_log, send_thanks, send_apology, log_global, *team_sends, telegram_send]
+             append_log, send_thanks, send_apology, log_global, *team_sends, telegram_send, telegram_lc]
 
     connections = {
         schedule["name"]:       {"main": [[{"node": fetch_reviews["name"], "type": "main", "index": 0}]]},
@@ -584,7 +589,7 @@ def build():
             [{"node": format_apology["name"], "type": "main", "index": 0}],
             [],
         ]},
-        format_team["name"]:    {"main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*team_sends, telegram_send]]]},
+        format_team["name"]:    {"main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*team_sends, telegram_send, telegram_lc]]]},
         format_thanks["name"]:  {"main": [[{"node": send_thanks["name"], "type": "main", "index": 0}]]},
         format_apology["name"]: {"main": [[{"node": send_apology["name"], "type": "main", "index": 0}]]},
         send_thanks["name"]:    {"main": [[{"node": log_global["name"], "type": "main", "index": 0}]]},

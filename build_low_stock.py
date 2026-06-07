@@ -6,7 +6,7 @@ import os
 import urllib.request
 import urllib.error
 
-from _notify import telegram_send_node
+from _notify import telegram_send_node, telegram_launchcycle_node
 import subprocess
 
 WF_ID = "lN4Bo5DOTVgGnpGl"
@@ -25,6 +25,8 @@ RECIPIENTS = [
     "+6590108515",  # Bon Pet official
     "+6587993341",  # Rachel
     "+6282240119788",  # Bari (CS agent, ID)
+    "+6583513308",  # Siva (Launch Cycle agency - external)
+    "+6588146498",  # Raghav (Launch Cycle agency - external)
 ]
 
 CLASSIFY_JS = r"""// Filter stock rows, classify into critical (<50) and low (<100), format two WhatsApp messages
@@ -233,10 +235,19 @@ def build():
     telegram_ok = telegram_send_node(
         "Send Telegram Weslee (OK)", [960, 1200 + len(RECIPIENTS)*100], ok_msg
     )
+    lc_crit = telegram_launchcycle_node(
+        "Send Telegram LaunchCycle (Critical)", [1160, len(RECIPIENTS)*100], crit_msg
+    )
+    lc_low = telegram_launchcycle_node(
+        "Send Telegram LaunchCycle (Low)", [1160, 400 + len(RECIPIENTS)*100], low_msg
+    )
+    lc_ok = telegram_launchcycle_node(
+        "Send Telegram LaunchCycle (OK)", [1160, 1200 + len(RECIPIENTS)*100], ok_msg
+    )
 
     nodes = [schedule, read_sheet, classify, if_critical, if_low, if_ok,
              *crit_sends, *low_sends, *ok_sends,
-             telegram_crit, telegram_low, telegram_ok]
+             telegram_crit, telegram_low, telegram_ok, lc_crit, lc_low, lc_ok]
 
     connections = {
         schedule["name"]: {
@@ -254,19 +265,19 @@ def build():
         },
         if_critical["name"]: {
             "main": [
-                [{"node": n["name"], "type": "main", "index": 0} for n in [*crit_sends, telegram_crit]],
+                [{"node": n["name"], "type": "main", "index": 0} for n in [*crit_sends, telegram_crit, lc_crit]],
                 [],
             ]
         },
         if_low["name"]: {
             "main": [
-                [{"node": n["name"], "type": "main", "index": 0} for n in [*low_sends, telegram_low]],
+                [{"node": n["name"], "type": "main", "index": 0} for n in [*low_sends, telegram_low, lc_low]],
                 [],
             ]
         },
         if_ok["name"]: {
             "main": [
-                [{"node": n["name"], "type": "main", "index": 0} for n in [*ok_sends, telegram_ok]],
+                [{"node": n["name"], "type": "main", "index": 0} for n in [*ok_sends, telegram_ok, lc_ok]],
                 [],
             ]
         },
