@@ -557,48 +557,49 @@ payload = {
     "settings": {"executionOrder": "v1"},
 }
 
-if WF_ID and WF_ID != "None":
-    # Update existing workflow
-    print(f"Updating existing workflow {WF_ID}...")
-    status, body = http("PUT", f"/workflows/{WF_ID}", payload)
-    print(f"PUT /workflows/{WF_ID} → HTTP {status}")
-    wf_id = WF_ID
-else:
-    # Create new workflow
-    print(f"Creating new workflow '{WF_NAME}'...")
-    status, body = http("POST", "/workflows", payload)
-    print(f"POST /workflows → HTTP {status}")
-    resp = json.loads(body)
-    wf_id = resp.get("id")
-    if not wf_id:
-        print("❌ Failed to create workflow")
-        print(body[:500])
-        exit(1)
-    print(f"✅ Workflow created: {wf_id}")
+if __name__ == "__main__":
+    if WF_ID and WF_ID != "None":
+        # Update existing workflow
+        print(f"Updating existing workflow {WF_ID}...")
+        status, body = http("PUT", f"/workflows/{WF_ID}", payload)
+        print(f"PUT /workflows/{WF_ID} → HTTP {status}")
+        wf_id = WF_ID
+    else:
+        # Create new workflow
+        print(f"Creating new workflow '{WF_NAME}'...")
+        status, body = http("POST", "/workflows", payload)
+        print(f"POST /workflows → HTTP {status}")
+        resp = json.loads(body)
+        wf_id = resp.get("id")
+        if not wf_id:
+            print("❌ Failed to create workflow")
+            print(body[:500])
+            exit(1)
+        print(f"✅ Workflow created: {wf_id}")
 
-    # Transfer to team project
-    print(f"Transferring to team project {TEAM}...")
-    status, body = http("PUT", f"/workflows/{wf_id}/transfer", {"destinationProjectId": TEAM})
-    print(f"PUT /transfer → HTTP {status}")
+        # Transfer to team project
+        print(f"Transferring to team project {TEAM}...")
+        status, body = http("PUT", f"/workflows/{wf_id}/transfer", {"destinationProjectId": TEAM})
+        print(f"PUT /transfer → HTTP {status}")
 
-print()
-print(f"✅ Workflow URL: https://n8n.thebonpet.com/workflow/{wf_id}")
-print(f"Manual webhook: https://n8n.thebonpet.com/webhook/{WEBHOOK_PATH}")
-print()
-print("📝 FOR DRY-RUN TEST (REQUIRED before activating):")
-print("1. Open the workflow in the n8n UI")
-print("2. Click on 'Compute Trial Candidates (D7/D14/D21)' Code node")
-print("3. Find the line: const DRY_RUN = false;")
-print("4. Change to: const DRY_RUN = true;")
-print("5. Click 'Test' node")
-print("6. Click 'Execute Workflow' (top right)")
-print("7. Check messages sent to your WA (+6581394225) — they should be prefixed with '🧪 DRY RUN'")
-print("8. Verify the structure and tone look good (no AI-speak, brand voice correct)")
-print()
-print("✅ THEN GO LIVE:")
-print("1. Toggle DRY_RUN back to false")
-print("2. Click 'Test' → 'Execute Workflow' once more to verify live sends work")
-print("3. Click the toggle at top-right to 'Active' (workflow auto-runs daily at 10 AM SGT)")
-print()
-print("Schedule: Daily 10 AM SGT (Asia/Singapore)")
-print("Manual trigger: POST to https://n8n.thebonpet.com/webhook/trigger-post-trial-now")
+    print()
+    print(f"✅ Workflow URL: https://n8n.thebonpet.com/workflow/{wf_id}")
+    print(f"Manual webhook: https://n8n.thebonpet.com/webhook/{WEBHOOK_PATH}")
+    print()
+    print("📝 FOR DRY-RUN TEST (REQUIRED before activating):")
+    print("1. Open the workflow in the n8n UI")
+    print("2. Click on 'Compute Trial Candidates (D7/D14/D21)' Code node")
+    print("3. Find the line: const DRY_RUN = false;")
+    print("4. Change to: const DRY_RUN = true;")
+    print("5. Click 'Test' node")
+    print("6. Click 'Execute Workflow' (top right)")
+    print("7. Check messages sent to your WA (+6581394225) — they should be prefixed with '🧪 DRY RUN'")
+    print("8. Verify the structure and tone look good (no AI-speak, brand voice correct)")
+    print()
+    print("✅ THEN GO LIVE:")
+    print("1. Toggle DRY_RUN back to false")
+    print("2. Click 'Test' → 'Execute Workflow' once more to verify live sends work")
+    print("3. Click the toggle at top-right to 'Active' (workflow auto-runs daily at 10 AM SGT)")
+    print()
+    print("Schedule: Daily 10 AM SGT (Asia/Singapore)")
+    print("Manual trigger: POST to https://n8n.thebonpet.com/webhook/trigger-post-trial-now")
