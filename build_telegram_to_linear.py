@@ -106,11 +106,12 @@ PARSE_MENTION_JS = r"""// Accept (a) @weslee_bot mentions in groups, OR (b) any 
 const upd = $input.first().json;
 const body = upd.body || upd;
 const msg = body.message || body.edited_message || body.channel_post || null;
-if (!msg || !msg.text) return [];
+if (!msg || (!msg.text && !msg.caption)) return [];
 
-const text = msg.text;
+// Photos/documents carry their text in `caption` (+ `caption_entities`), not `text`.
+const text = msg.text || msg.caption || '';
 const isPrivate = msg.chat && msg.chat.type === 'private';
-const entities = msg.entities || [];
+const entities = msg.entities || msg.caption_entities || [];
 let mentioned = false;
 for (const e of entities) {
   if (e.type === 'mention') {
