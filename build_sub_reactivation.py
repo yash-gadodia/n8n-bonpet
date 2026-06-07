@@ -28,7 +28,7 @@ import urllib.request
 import uuid
 
 from _blacklist import BLACKLIST_JS_SNIPPET
-from _notify import telegram_send_node
+from _notify import telegram_send_node, telegram_launchcycle_node
 from _sent_log import (
     COOLDOWN_JS_SNIPPET,
     append_global_sent_log_node,
@@ -680,6 +680,7 @@ def build():
     route_customer = code_node("Pick Customers", [1080, 600], split_customer_filter_dry_js(DRY_RUN))
 
     telegram_summary = telegram_send_node("Send Telegram Summary", [1320, 300])
+    telegram_summary_lc = telegram_launchcycle_node("Send Telegram Summary LaunchCycle", [1320, 420])
 
     send_wa = send_wa_node()
 
@@ -697,7 +698,7 @@ def build():
         read_subs, read_customers, read_orders, read_react, read_global, filter_global,
         merge, compute,
         route_summary, route_customer,
-        telegram_summary, send_wa,
+        telegram_summary, telegram_summary_lc, send_wa,
         pick_for_log, log_react, log_global,
     ]
 
@@ -727,7 +728,7 @@ def build():
             {"node": route_summary["name"],  "type": "main", "index": 0},
             {"node": route_customer["name"], "type": "main", "index": 0},
         ]]},
-        route_summary["name"]:  {"main": [[{"node": telegram_summary["name"], "type": "main", "index": 0}]]},
+        route_summary["name"]:  {"main": [[{"node": telegram_summary["name"], "type": "main", "index": 0}, {"node": telegram_summary_lc["name"], "type": "main", "index": 0}]]},
         route_customer["name"]: {"main": [[{"node": send_wa["name"],          "type": "main", "index": 0}]]},
         send_wa["name"]:        {"main": [[{"node": pick_for_log["name"],     "type": "main", "index": 0}]]},
         pick_for_log["name"]:   {"main": [[

@@ -6,7 +6,7 @@ import os
 import urllib.request
 import urllib.error
 
-from _notify import telegram_send_node
+from _notify import telegram_send_node, telegram_launchcycle_node
 import subprocess
 
 API = "https://n8n.thebonpet.com/api/v1"
@@ -29,6 +29,8 @@ RECIPIENTS = [
     "+6590108515",  # Bon Pet official
     "+6587993341",  # Rachel
     "+6282240119788",  # Bari (CS agent, ID)
+    "+6583513308",  # Siva (Launch Cycle agency - external)
+    "+6588146498",  # Raghav (Launch Cycle agency - external)
 ]
 
 DATE_RANGES_JS = r"""// Compute "this_week" (most recent completed Mon-Sun in SGT) + prev week
@@ -312,8 +314,11 @@ def build():
     telegram_send = telegram_send_node(
         "Send Telegram Weslee", [960, 200 + len(RECIPIENTS) * 100]
     )
+    telegram_lc = telegram_launchcycle_node(
+        "Send Telegram LaunchCycle", [960, 300 + len(RECIPIENTS) * 100]
+    )
 
-    nodes = [schedule, manual, set_dates, fetch_orders, aggregate, *wa_sends, telegram_send]
+    nodes = [schedule, manual, set_dates, fetch_orders, aggregate, *wa_sends, telegram_send, telegram_lc]
 
     connections = {
         schedule["name"]: {
@@ -329,7 +334,7 @@ def build():
             "main": [[{"node": aggregate["name"], "type": "main", "index": 0}]]
         },
         aggregate["name"]: {
-            "main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*wa_sends, telegram_send]]]
+            "main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*wa_sends, telegram_send, telegram_lc]]]
         },
     }
 

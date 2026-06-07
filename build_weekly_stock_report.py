@@ -14,7 +14,7 @@ import os
 import urllib.request
 import urllib.error
 
-from _notify import telegram_send_node
+from _notify import telegram_send_node, telegram_launchcycle_node
 import subprocess
 
 API = "https://n8n.thebonpet.com/api/v1"
@@ -40,6 +40,8 @@ RECIPIENTS = [
     "+6590108515",     # Bon Pet official
     "+6587993341",     # Rachel
     "+6282240119788",  # Bari (CS)
+    "+6583513308",  # Siva (Launch Cycle agency - external)
+    "+6588146498",  # Raghav (Launch Cycle agency - external)
 ]
 
 FORMAT_JS = r"""// Build weekly stock snapshot enriched with cook + consumption data.
@@ -345,8 +347,11 @@ def build():
     telegram_send = telegram_send_node(
         "Send Telegram Weslee", [960, 100 + len(RECIPIENTS) * 100]
     )
+    telegram_lc = telegram_launchcycle_node(
+        "Send Telegram LaunchCycle", [960, 200 + len(RECIPIENTS) * 100]
+    )
 
-    nodes = [schedule, manual, read_dashboard, read_in, read_out, merge, format_node, *wa_sends, telegram_send]
+    nodes = [schedule, manual, read_dashboard, read_in, read_out, merge, format_node, *wa_sends, telegram_send, telegram_lc]
 
     fanout_targets = [
         {"node": read_dashboard["name"], "type": "main", "index": 0},
@@ -362,7 +367,7 @@ def build():
         merge["name"]:           {"main": [[{"node": format_node["name"], "type": "main", "index": 0}]]},
         format_node["name"]:     {"main": [[
             {"node": n["name"], "type": "main", "index": 0}
-            for n in [*wa_sends, telegram_send]
+            for n in [*wa_sends, telegram_send, telegram_lc]
         ]]},
     }
 

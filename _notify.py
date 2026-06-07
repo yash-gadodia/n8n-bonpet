@@ -17,6 +17,12 @@ TELEGRAM_CHAT_ID = "-1002184573790"
 TELEGRAM_THREAD_ID = 34253
 TELEGRAM_TOKEN_FILE = os.path.expanduser("~/.telegram-weslee-bot-token")
 
+# "Launch Cycle X The Bon Pet" group — external advisory agency (Raghav/Siva).
+# Basic group (no topics), so no message_thread_id. NOTE: if Telegram auto-upgrades
+# it to a supergroup the id changes to a -100... form and sends silently no-op
+# (onError=continueRegularOutput) — watch for it and refresh this id.
+TELEGRAM_LAUNCHCYCLE_CHAT_ID = "-5177312185"
+
 
 def _telegram_token():
     return open(TELEGRAM_TOKEN_FILE).read().strip()
@@ -30,6 +36,35 @@ def telegram_send_node(name, pos, message_expr="={{ $json.message }}", parse_mod
     params = [
         {"name": "chat_id", "value": TELEGRAM_CHAT_ID},
         {"name": "message_thread_id", "value": str(TELEGRAM_THREAD_ID)},
+        {"name": "text", "value": message_expr},
+    ]
+    if parse_mode:
+        params.append({"name": "parse_mode", "value": parse_mode})
+    return {
+        "parameters": {
+            "method": "POST",
+            "url": f"https://api.telegram.org/bot{token}/sendMessage",
+            "sendBody": True,
+            "bodyParameters": {"parameters": params},
+            "options": {},
+        },
+        "id": str(uuid.uuid4()),
+        "name": name,
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": pos,
+        "onError": "continueRegularOutput",
+    }
+
+
+def telegram_launchcycle_node(name, pos, message_expr="={{ $json.message }}", parse_mode="Markdown"):
+    # Mirror of telegram_send_node pointing at the "Launch Cycle X The Bon Pet"
+    # group (external agency). Wire it as a sibling of "Send Telegram Weslee" from
+    # the same upstream node, passing the SAME message_expr that carries the team
+    # content for that workflow. Basic group => no message_thread_id.
+    token = _telegram_token()
+    params = [
+        {"name": "chat_id", "value": TELEGRAM_LAUNCHCYCLE_CHAT_ID},
         {"name": "text", "value": message_expr},
     ]
     if parse_mode:

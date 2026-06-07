@@ -8,7 +8,7 @@ import os
 import urllib.request
 import urllib.error
 
-from _notify import telegram_send_node
+from _notify import telegram_send_node, telegram_launchcycle_node
 import subprocess
 
 API = "https://n8n.thebonpet.com/api/v1"
@@ -32,6 +32,8 @@ RECIPIENTS = [
     "+6590108515",  # Bon Pet official
     "+6587993341",  # Rachel
     "+6282240119788",  # Bari (CS agent, ID)
+    "+6583513308",  # Siva (Launch Cycle agency - external)
+    "+6588146498",  # Raghav (Launch Cycle agency - external)
 ]
 
 TAG_REFUND_JS = r"""
@@ -291,8 +293,11 @@ def build():
     telegram_send = telegram_send_node(
         "Send Telegram Weslee", [960, 150 + len(RECIPIENTS) * 110]
     )
+    telegram_lc = telegram_launchcycle_node(
+        "Send Telegram LaunchCycle", [960, 260 + len(RECIPIENTS) * 110]
+    )
 
-    nodes = [refund_hook, cancel_hook, tag_refund, tag_cancel, read_sheet, format_node, *team_sends, telegram_send]
+    nodes = [refund_hook, cancel_hook, tag_refund, tag_cancel, read_sheet, format_node, *team_sends, telegram_send, telegram_lc]
 
     connections = {
         refund_hook["name"]: {"main": [[{"node": tag_refund["name"], "type": "main", "index": 0}]]},
@@ -300,7 +305,7 @@ def build():
         tag_refund["name"]:  {"main": [[{"node": read_sheet["name"], "type": "main", "index": 0}]]},
         tag_cancel["name"]:  {"main": [[{"node": read_sheet["name"], "type": "main", "index": 0}]]},
         read_sheet["name"]:  {"main": [[{"node": format_node["name"], "type": "main", "index": 0}]]},
-        format_node["name"]: {"main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*team_sends, telegram_send]]]},
+        format_node["name"]: {"main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*team_sends, telegram_send, telegram_lc]]]},
     }
 
     return {

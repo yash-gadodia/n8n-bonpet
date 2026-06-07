@@ -9,7 +9,7 @@ Architecture:
 In DRY RUN, Send WA targets Yash only. Flip DRY_RUN const to false in the Code node + re-PUT to go live.
 """
 import json, uuid, os, subprocess, urllib.request, urllib.error
-from _notify import telegram_send_node
+from _notify import telegram_send_node, telegram_launchcycle_node
 from _sent_log import (
     read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
@@ -458,9 +458,10 @@ log_sent = log_sent_node()
 log_global = append_global_sent_log_node([1680, 300])
 pass_header = pass_header_only_node()
 send_telegram = telegram_send_node("Send Telegram Weslee", [1440, 500])
+send_telegram_lc = telegram_launchcycle_node("Send Telegram LaunchCycle", [1440, 620])
 
 nodes = [schedule, webhook, read_orders, read_subs, read_sent_log, read_global, code,
-         send_wa, skip_header, log_sent, log_global, pass_header, send_telegram]
+         send_wa, skip_header, log_sent, log_global, pass_header, send_telegram, send_telegram_lc]
 connections = {
     schedule["name"]: {"main": [[{"node": read_orders["name"], "type": "main", "index": 0}]]},
     webhook["name"]:  {"main": [[{"node": read_orders["name"], "type": "main", "index": 0}]]},
@@ -482,7 +483,7 @@ connections = {
         {"node": log_sent["name"],   "type": "main", "index": 0},
         {"node": log_global["name"], "type": "main", "index": 0},
     ]]},
-    pass_header["name"]: {"main": [[{"node": send_telegram["name"], "type": "main", "index": 0}]]},
+    pass_header["name"]: {"main": [[{"node": send_telegram["name"], "type": "main", "index": 0}, {"node": send_telegram_lc["name"], "type": "main", "index": 0}]]},
 }
 
 payload = {

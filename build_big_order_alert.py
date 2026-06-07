@@ -10,7 +10,7 @@ import urllib.request
 import urllib.error
 import subprocess
 
-from _notify import telegram_send_node
+from _notify import telegram_send_node, telegram_launchcycle_node
 from _sent_log import (
     read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
@@ -39,6 +39,8 @@ RECIPIENTS = [
     "+6590108515",     # Bon Pet official
     "+6587993341",     # Rachel
     "+6282240119788",  # Bari (CS)
+    "+6583513308",  # Siva (Launch Cycle agency - external)
+    "+6588146498",  # Raghav (Launch Cycle agency - external)
 ]
 
 BIG_ORDER_THRESHOLD_SGD = 200
@@ -335,6 +337,9 @@ def build():
     telegram_send = telegram_send_node(
         "Send Telegram Weslee", [960, 100 + len(RECIPIENTS) * 90]
     )
+    telegram_lc = telegram_launchcycle_node(
+        "Send Telegram LaunchCycle", [960, 200 + len(RECIPIENTS) * 90], "={{ $json.team_msg }}"
+    )
 
     # Customer send is gated by three checks:
     # 1) has phone  2) not a subscription renewal  3) 30-min cool-off delay
@@ -405,7 +410,7 @@ def build():
     customer_send = customer_wa_node("Send Customer Thank-You", [1680, 600])
     log_global = append_global_sent_log_node([1920, 600])
 
-    nodes = [trigger, threshold_if, read_sheet, read_global, lookup_format, *team_sends, telegram_send,
+    nodes = [trigger, threshold_if, read_sheet, read_global, lookup_format, *team_sends, telegram_send, telegram_lc,
              customer_phone_if, not_subscription_if, not_in_cooldown_if, wait_30min, customer_send, log_global]
 
     connections = {
@@ -417,7 +422,7 @@ def build():
         read_sheet["name"]:     {"main": [[{"node": read_global["name"], "type": "main", "index": 0}]]},
         read_global["name"]:    {"main": [[{"node": lookup_format["name"], "type": "main", "index": 0}]]},
         lookup_format["name"]:  {"main": [[
-            *[{"node": n["name"], "type": "main", "index": 0} for n in [*team_sends, telegram_send]],
+            *[{"node": n["name"], "type": "main", "index": 0} for n in [*team_sends, telegram_send, telegram_lc]],
             {"node": customer_phone_if["name"], "type": "main", "index": 0},
         ]]},
         customer_phone_if["name"]: {"main": [

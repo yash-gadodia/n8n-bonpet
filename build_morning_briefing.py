@@ -6,7 +6,7 @@ import os
 import urllib.request
 import urllib.error
 
-from _notify import telegram_send_node
+from _notify import telegram_send_node, telegram_launchcycle_node
 from _sent_log import read_global_sent_log_node, filter_recent_sent_log_node
 import subprocess
 
@@ -29,6 +29,8 @@ RECIPIENTS = [
     "+6590108515",  # Bon Pet official
     "+6587993341",  # Rachel
     "+6282240119788",  # Bari (CS agent, ID)
+    "+6583513308",  # Siva (Launch Cycle agency - external)
+    "+6588146498",  # Raghav (Launch Cycle agency - external)
 ]
 
 # Goal tiers
@@ -530,8 +532,11 @@ def build():
     telegram_send = telegram_send_node(
         "Send Telegram Weslee", [1200, 200 + len(RECIPIENTS) * 100]
     )
+    telegram_lc = telegram_launchcycle_node(
+        "Send Telegram LaunchCycle", [1200, 300 + len(RECIPIENTS) * 100]
+    )
 
-    nodes = [schedule, manual, set_dates, fetch_orders, fetch_open, fetch_refunds, read_wa_log, filter_wa, merge, aggregate, *wa_sends, telegram_send]
+    nodes = [schedule, manual, set_dates, fetch_orders, fetch_open, fetch_refunds, read_wa_log, filter_wa, merge, aggregate, *wa_sends, telegram_send, telegram_lc]
 
     connections = {
         schedule["name"]:      {"main": [[{"node": set_dates["name"], "type": "main", "index": 0}]]},
@@ -550,7 +555,7 @@ def build():
         read_wa_log["name"]:   {"main": [[{"node": filter_wa["name"], "type": "main", "index": 0}]]},
         filter_wa["name"]:     {"main": [[{"node": merge["name"], "type": "main", "index": 3}]]},
         merge["name"]:         {"main": [[{"node": aggregate["name"], "type": "main", "index": 0}]]},
-        aggregate["name"]:     {"main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*wa_sends, telegram_send]]]},
+        aggregate["name"]:     {"main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*wa_sends, telegram_send, telegram_lc]]]},
     }
 
     return {

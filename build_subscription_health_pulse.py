@@ -19,7 +19,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-from _notify import telegram_send_node
+from _notify import telegram_send_node, telegram_launchcycle_node
 
 API = "https://n8n.thebonpet.com/api/v1"
 WF_NAME = "Subscription Health Pulse"
@@ -45,6 +45,8 @@ RECIPIENTS = [
     "+6590108515",   # Bon Pet official
     "+6587993341",   # Rachel
     "+6282240119788",  # Bari (CS agent, ID)
+    "+6583513308",  # Siva (Launch Cycle agency - external)
+    "+6588146498",  # Raghav (Launch Cycle agency - external)
 ]
 
 
@@ -433,8 +435,11 @@ def build():
     telegram_send = telegram_send_node(
         "Send Telegram Weslee", [1140, 200 + len(RECIPIENTS) * 90]
     )
+    telegram_lc = telegram_launchcycle_node(
+        "Send Telegram LaunchCycle", [1140, 300 + len(RECIPIENTS) * 90]
+    )
 
-    nodes = [schedule, manual, set_dates, fetch_orders, read_subs, merge, aggregate, *wa_sends, telegram_send]
+    nodes = [schedule, manual, set_dates, fetch_orders, read_subs, merge, aggregate, *wa_sends, telegram_send, telegram_lc]
 
     connections = {
         schedule["name"]:     {"main": [[{"node": set_dates["name"], "type": "main", "index": 0}]]},
@@ -448,7 +453,7 @@ def build():
         fetch_orders["name"]: {"main": [[{"node": merge["name"], "type": "main", "index": 0}]]},
         read_subs["name"]:    {"main": [[{"node": merge["name"], "type": "main", "index": 1}]]},
         merge["name"]:        {"main": [[{"node": aggregate["name"], "type": "main", "index": 0}]]},
-        aggregate["name"]:    {"main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*wa_sends, telegram_send]]]},
+        aggregate["name"]:    {"main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*wa_sends, telegram_send, telegram_lc]]]},
     }
 
     return {
