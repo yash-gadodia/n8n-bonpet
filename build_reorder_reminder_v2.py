@@ -493,9 +493,10 @@ payload = {
     "settings": {"executionOrder": "v1"},
 }
 
-status, body = http("PUT", f"/workflows/{WF_ID}", payload)
-print(f"PUT → HTTP {status}")
-print(body[:300])
-print()
-print(f"Workflow URL: https://n8n.thebonpet.com/workflow/{WF_ID}")
-print(f"Manual webhook: https://n8n.thebonpet.com/webhook/{WEBHOOK_PATH}")
+if __name__ == "__main__":
+    status, body = http("PUT", f"/workflows/{WF_ID}", payload)
+    print(f"PUT → HTTP {status}")
+    print(body[:300])
+    print()
+    print(f"Workflow URL: https://n8n.thebonpet.com/workflow/{WF_ID}")
+    print(f"Manual webhook: https://n8n.thebonpet.com/webhook/{WEBHOOK_PATH}")

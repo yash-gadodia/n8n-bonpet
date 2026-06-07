@@ -244,21 +244,47 @@ def telegram_node():
     }
 
 
+def telegram_lc_node():
+    # Mirror of telegram_node() pointing at the "Launch Cycle X The Bon Pet" group
+    # (external advisory agency). Basic group => no message_thread_id.
+    return {
+        "parameters": {
+            "method": "POST",
+            "url": f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            "sendBody": True,
+            "bodyParameters": {"parameters": [
+                {"name": "chat_id", "value": "-5177312185"},
+                {"name": "text", "value": "={{ $json.message }}"},
+                {"name": "parse_mode", "value": "Markdown"},
+                {"name": "disable_web_page_preview", "value": "true"},
+            ]},
+            "options": {},
+        },
+        "id": uid(),
+        "name": "Send Telegram LaunchCycle",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [720, 460],
+        "onError": "continueRegularOutput",
+    }
+
+
 def build():
     sched = schedule_node()
     manual = manual_node()
     fetch = linear_node()
     fmt = code_node()
     tg = telegram_node()
+    lc = telegram_lc_node()
 
     return {
         "name": WF_NAME,
-        "nodes": [sched, manual, fetch, fmt, tg],
+        "nodes": [sched, manual, fetch, fmt, tg, lc],
         "connections": {
             sched["name"]:  {"main": [[{"node": fetch["name"], "type": "main", "index": 0}]]},
             manual["name"]: {"main": [[{"node": fetch["name"], "type": "main", "index": 0}]]},
             fetch["name"]:  {"main": [[{"node": fmt["name"],   "type": "main", "index": 0}]]},
-            fmt["name"]:    {"main": [[{"node": tg["name"],    "type": "main", "index": 0}]]},
+            fmt["name"]:    {"main": [[{"node": tg["name"], "type": "main", "index": 0}, {"node": lc["name"], "type": "main", "index": 0}]]},
         },
         "settings": {
             "executionOrder": "v1",
