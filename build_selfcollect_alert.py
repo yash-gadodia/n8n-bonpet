@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Self-Collection Order Alert — pings Yash in the Team Bon Pet weslee thread
-whenever a paid order has shipping_line.title containing 'self-collect'.
+"""Self-Collection Order Alert - routes each self-collect order to the right pickup
+IC in Telegram, keyed on the postal code in the "Self-Collection - <postal>" shipping title.
 
-Trigger: Shopify orders/paid webhook (registered separately — see bottom).
-Pipeline: webhook → Read Customers (enrich) → Format Alert → IF self-collect → Telegram (weslee).
+  448908 / legacy "Self-Collection"  ->  Siglap (Yash):   main weslee thread tag + DM
+  681810                              ->  CCK (Chandani):  her group tag + main thread info + DM
+
+Trigger: Shopify orders/paid webhook (registered separately, see bottom).
+Pipeline: webhook -> Read Customers (enrich) -> Format Alert (fan out send-jobs) -> IF self-collect -> Telegram.
 
 Customer PII (name+phone) is pulled from the Customer Orders DB Google Sheet
 (Customers tab gid 100100) because Shopify Basic blocks PII in Admin API payloads.
@@ -14,30 +17,53 @@ API = "https://n8n.thebonpet.com/api/v1"
 WF_NAME = "Self-Collect Order Alert - Telegram"
 WEBHOOK_PATH = "selfcollect-order-alert-9b3e1f7c2d"
 
-TELEGRAM_CHAT_ID = "-1002184573790"          # Team Bon Pet supergroup
-TELEGRAM_WESLEE_THREAD_ID = "34253"          # weslee thread (was "2" / ops thread until 2026-05-16)
-TELEGRAM_TAG = "@yashgadodia"
+TELEGRAM_CHAT_ID = "-1002184573790"          # Team Bon Pet supergroup (main thread)
+TELEGRAM_WESLEE_THREAD_ID = 34253            # weslee thread (was "2" / ops thread until 2026-05-16)
 TELEGRAM_TOKEN = open(os.path.expanduser("~/.telegram-weslee-bot-token")).read().strip()
+
+# ── Pickup points ──────────────────────────────────────────────────────────
+# Pickup point is encoded in the shipping title "Self-Collection - <postal>".
+#   448908 (or legacy bare "Self-Collection")  → Siglap   → Yash
+#   681810                                      → Choa Chu Kang (CCK) → Chandani
+CCK_POSTALS = ["681810"]                      # postal codes routed to Chandani's CCK point
+
+# Siglap (Yash)
+YASH_USERNAME = "yashgadodia"
+YASH_DM_ID = 166637821                        # Yash's private chat with @weslee_bot
+
+# CCK (Chandani)
+CHANDANI_CHAT_ID = "-5033434144"             # "Chandani X The Bon Pet" group
+CHANDANI_USERNAME = "chandkiraat"            # @-tag in her group
+CHANDANI_DM_ID = None                         # set after she /start's @weslee_bot (then redeploy)
+
+# Launch Cycle (external advisory agency) - visibility copy of every self-collect order
+LAUNCHCYCLE_CHAT_ID = "-5177312185"          # "Launch Cycle X The Bon Pet" group
 
 GS_CRED = {"id": "KLjk8w62GoEMImKa", "name": "Google Sheets account"}
 SHEET_ID = "1GP0RBDnvl-tHBDRv6DRdrungM2BXM5Z-LnQxmzEeuXI"
 CUSTOMERS_GID = 100100
 
 
-FORMAT_JS = r"""// Parse Shopify orders/paid payload, detect Self-Collection, enrich + build Telegram message.
+FORMAT_JS = r"""// Parse orders/paid, detect self-collect + pickup point, enrich, fan out send-jobs (group ping(s) + IC DM).
 const p = $('Shopify Webhook (orders/paid)').first().json;
 const body = p.body || p;
 
 const shippingLines = body.shipping_lines || [];
-const isSelfCollect = shippingLines.some(s =>
-  String(s.title || '').toLowerCase().includes('self-collect') ||
-  String(s.title || '').toLowerCase().includes('self collect') ||
-  String(s.code || '').toLowerCase().includes('self-collect')
-);
+const scLine = shippingLines.find(s => {
+  const t = String(s.title || '').toLowerCase();
+  const c = String(s.code || '').toLowerCase();
+  return t.includes('self-collect') || t.includes('self collect') || t.includes('self-collection') ||
+         c.includes('self-collect') || c.includes('self-collection');
+});
 
-if (!isSelfCollect) {
+if (!scLine) {
   return [{ json: { is_self_collect: false, skip_reason: 'not a self-collect order' } }];
 }
+
+// Pickup point from the 6-digit postal in "Self-Collection - <postal>".
+const postal = (String(scLine.title || '').match(/(\d{6})/) || [])[1] || '';
+const CCK_POSTALS = __CCK_POSTALS__;
+const isCCK = CCK_POSTALS.indexOf(postal) !== -1;
 
 const orderName = body.name || `#${body.order_number || body.id}`;
 const total = body.total_price || '0.00';
@@ -67,12 +93,12 @@ for (const c of $('Read Customers').all()) {
     break;
   }
 }
-// Fall back to webhook payload (rare — present only if Shopify happens to include it)
+// Fall back to webhook payload (rare, present only if Shopify happens to include it)
 if (!fullName) {
   const cust = body.customer || {};
   fullName = `${cust.first_name || ''} ${cust.last_name || ''}`.trim() || '(name not in Customers tab)';
 }
-if (!phone) phone = normalizePhone((body.customer || {}).phone || body.phone || '') || '—';
+if (!phone) phone = normalizePhone((body.customer || {}).phone || body.phone || '') || '(no phone)';
 if (!email) email = (body.customer || {}).email || body.email || '';
 
 // Delivery Date from note_attributes (Bon Pet's pickup-date field)
@@ -93,29 +119,68 @@ const createdSgt = new Date(body.created_at || Date.now()).toLocaleString('en-SG
   hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short',
 });
 
-const message = `🏪 *Self-collect order* ${orderName}
-
-👤 *${fullName}* · ${phone}${email ? '\n📧 ' + email : ''}
+// Shared order summary block, reused across the group ping(s) + IC DM.
+const summary = `👤 *${fullName}* · ${phone}${email ? '\n📧 ' + email : ''}
 📅 Pickup: *${deliveryDate}*
 💰 ${currency} $${total}
 
 🛒 Items:
         ${items}${notesLine}
 
-📥 Ordered: ${createdSgt} SGT
+📥 Ordered: ${createdSgt} SGT`;
 
-""" + TELEGRAM_TAG + r""" heads up — queue for pickup at Siglap freezer.`;
+// Telegram targets
+const MAIN_CHAT = '__MAIN_CHAT__';
+const MAIN_THREAD = __MAIN_THREAD__;
+const CHANDANI_CHAT = '__CHANDANI_CHAT__';
+const CHANDANI_USERNAME = '__CHANDANI_USERNAME__';
+const CHANDANI_DM = __CHANDANI_DM__;
+const YASH_USERNAME = '__YASH_USERNAME__';
+const YASH_DM = __YASH_DM__;
+const LAUNCHCYCLE_CHAT = '__LC_CHAT__';
 
-return [{
-  json: {
-    is_self_collect: true,
-    message: message,
-    order_name: orderName,
-    customer_phone: phone,
-    delivery_date: deliveryDate,
+const jobs = [];
+if (isCCK) {
+  const tag = CHANDANI_USERNAME ? `@${CHANDANI_USERNAME}` : 'Chandani';
+  // 1) Chandani's group, actionable + tagged
+  jobs.push({ chat_id: CHANDANI_CHAT,
+    text: `🏪 *Self-collect order · CCK* ${orderName}\n\n${summary}\n\n${tag} heads up, please queue this for pickup at the CCK point. 📦` });
+  // 2) main team thread, visibility only (no tag)
+  jobs.push({ chat_id: MAIN_CHAT, message_thread_id: MAIN_THREAD,
+    text: `🏪 *Self-collect order · CCK (Chandani's point)* ${orderName}\n\n${summary}` });
+  // 3) DM Chandani to pack (only once she has registered with the bot)
+  if (CHANDANI_DM) {
+    jobs.push({ chat_id: CHANDANI_DM,
+      text: `📦 *New CCK self-collect order to pack* ${orderName}\n\n${summary}` });
   }
-}];
+} else {
+  // Siglap (448908 / legacy bare "Self-Collection")
+  // 1) main team thread, actionable + tag Yash
+  jobs.push({ chat_id: MAIN_CHAT, message_thread_id: MAIN_THREAD,
+    text: `🏪 *Self-collect order · Siglap* ${orderName}\n\n${summary}\n\n@${YASH_USERNAME} heads up, queue for pickup at the Siglap freezer. 📦` });
+  // 2) DM Yash to pack
+  if (YASH_DM) {
+    jobs.push({ chat_id: YASH_DM,
+      text: `📦 *New Siglap self-collect order to pack* ${orderName}\n\n${summary}` });
+  }
+}
+
+// Launch Cycle (external agency) - visibility copy for every self-collect order
+jobs.push({ chat_id: LAUNCHCYCLE_CHAT,
+  text: `🏪 *Self-collect order · ${isCCK ? 'CCK' : 'Siglap'}* ${orderName}\n\n${summary}` });
+
+return jobs.map(j => ({ json: Object.assign({ is_self_collect: true, order_name: orderName, pickup_point: isCCK ? 'cck' : 'siglap' }, j) }));
 """
+FORMAT_JS = (FORMAT_JS
+    .replace("__CCK_POSTALS__", json.dumps(CCK_POSTALS))
+    .replace("__MAIN_CHAT__", TELEGRAM_CHAT_ID)
+    .replace("__MAIN_THREAD__", str(TELEGRAM_WESLEE_THREAD_ID))
+    .replace("__CHANDANI_CHAT__", CHANDANI_CHAT_ID)
+    .replace("__CHANDANI_USERNAME__", CHANDANI_USERNAME)
+    .replace("__CHANDANI_DM__", str(CHANDANI_DM_ID) if CHANDANI_DM_ID else "null")
+    .replace("__YASH_USERNAME__", YASH_USERNAME)
+    .replace("__YASH_DM__", str(YASH_DM_ID) if YASH_DM_ID else "null")
+    .replace("__LC_CHAT__", LAUNCHCYCLE_CHAT_ID))
 
 
 def uid(): return str(uuid.uuid4())
@@ -156,7 +221,7 @@ webhook = {
 read_customers = {
     "parameters": {
         "documentId": {"__rl": True, "value": SHEET_ID, "mode": "list",
-                       "cachedResultName": "Bon Pet — Customer Orders DB",
+                       "cachedResultName": "Bon Pet - Customer Orders DB",
                        "cachedResultUrl": f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit"},
         "sheetName": {"__rl": True, "value": CUSTOMERS_GID, "mode": "list",
                       "cachedResultName": "customers",
@@ -200,13 +265,13 @@ send_telegram = {
     "parameters": {
         "method": "POST",
         "url": f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        "sendBody": True,
-        "bodyParameters": {"parameters": [
-            {"name": "chat_id", "value": TELEGRAM_CHAT_ID},
-            {"name": "message_thread_id", "value": TELEGRAM_WESLEE_THREAD_ID},
-            {"name": "text", "value": "={{ $json.message }}"},
-            {"name": "parse_mode", "value": "Markdown"},
-        ]},
+        "sendBody": True, "specifyBody": "json",
+        "jsonBody": (
+            "={{ JSON.stringify(Object.assign("
+            "{ chat_id: $json.chat_id, text: $json.text, parse_mode: 'Markdown', disable_web_page_preview: true }, "
+            "$json.message_thread_id ? { message_thread_id: $json.message_thread_id } : {}"
+            ")) }}"
+        ),
         "options": {},
     },
     "id": uid(), "name": "Send Telegram (ops)",
