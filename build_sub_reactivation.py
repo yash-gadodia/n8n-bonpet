@@ -32,7 +32,7 @@ from _notify import telegram_send_node, telegram_launchcycle_node
 from _sent_log import (
     COOLDOWN_JS_SNIPPET,
     append_global_sent_log_node,
-    filter_recent_sent_log_node,
+    native_filter_recent_sent_log_node,
     read_global_sent_log_node,
 )
 
@@ -659,7 +659,7 @@ def build():
     read_orders    = gs_read_node("Read Orders",              [240, 500], ORDERS_TAB_GID, "orders")
     read_react     = gs_read_node("Read Reactivation Sent",   [240, 700], REACT_SENT_GID, REACT_SENT_TAB)
     read_global    = read_global_sent_log_node([240, 900])
-    filter_global  = filter_recent_sent_log_node([400, 900], days=14)
+    filter_global  = native_filter_recent_sent_log_node([400, 900], days=14)
 
     merge = merge_node("Merge", [600, 500], 5)
 
