@@ -149,42 +149,107 @@ return [{ json: base }]; // 0 matches
 BUILD_WA_MSG_JS = r"""const ctx = $input.first().json;
 const o = ctx.order;
 
-const lines = [
-  `Hi ${o.first_name}! 🐾`,
-  '',
-  `Your order ${o.order_name} is packed and ready for self-collection 🎉`,
-  '',
-  `📍 *Address:* 5 Siglap Road, Lobby K (Mandarin Gardens Condo), unit #17-38, Singapore 448908`,
-  '',
-  `❄️ Look for the pack labeled with your order ID *${o.order_name}* in the *WHITE freezer*`,
-  `ℹ️ Please skip the *ORANGE freezer*, it's not part of the pickup`,
-  '',
-  `A few quick notes:`,
-  `🙏 *Please collect within 3 days of this message.* Our freezer at the pickup point is small, so we really need every pack out fast to make room for the next batch`,
-  `💬 If 3 days doesn't work for you, just reply and let us know, we'll figure something out together`,
-  `✅ The freezer is accessible 24/7, pop by anytime`,
-  `✅ The pack itself is a cooler bag, just get it into your home freezer within 2-3 hours of pickup`,
-  `✅ Once frozen, good for up to 1 year`,
-];
+const SHOP = '__SHOP__';
+const API = '__API_VERSION__';
+const TOKEN = '__SHOPIFY_TOKEN__';
+const CCK_POSTALS = ['681810'];
+
+let postal = '';
+try {
+  const resp = await this.helpers.httpRequest({
+    method: 'POST',
+    url: `https://${SHOP}/admin/api/${API}/graphql.json`,
+    headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' },
+    body: { query: 'query($q:String!){orders(first:1,query:$q){nodes{name shippingLines(first:5){nodes{title code}}}}}', variables: { q: `name:${o.order_name}` } },
+    json: true,
+  });
+  const node = resp && resp.data && resp.data.orders && resp.data.orders.nodes && resp.data.orders.nodes[0];
+  const sl = (node && node.shippingLines && node.shippingLines.nodes) || [];
+  const scTitle = sl.map(x => String((x && x.title) || '')).find(t => /self.?collect/i.test(t)) || '';
+  postal = (scTitle.match(/(\d{6})/) || [])[1] || '';
+} catch (e) { postal = ''; }
+
+const isCCK = CCK_POSTALS.indexOf(postal) !== -1;
+
+let lines;
+let signoff;
+
+if (isCCK) {
+  lines = [
+    `Hi ${o.first_name}! 🐾`,
+    '',
+    `Great news, your order ${o.order_name} is packed and ready for self-collection! 🎉`,
+    '',
+    `📍 *Pickup Location (Choa Chu Kang)*`,
+    `Blk 810A Choa Chu Kang Ave 7`,
+    `#08-503`,
+    `Singapore 681810`,
+    '',
+    `🕐 *Collection Hours*`,
+    `• Mon, Wed, Fri: 10am to 10pm`,
+    `• Tue, Thu: 6pm to 10pm`,
+    `• Sun: 12pm to 9pm`,
+    `• Sat: Closed (or by special arrangement, just drop us a message!)`,
+    '',
+    `📱 Please do not ring the doorbell. When you're on your way up, simply send us a text and we'll come out to pass your order to you. 😊`,
+    '',
+    `❄️ Your order comes packed in a cooler bag. Please transfer it to your freezer within 2-3 hours of collection.`,
+    '',
+    `✅ Keeps fresh for up to 1 year when stored frozen.`,
+    '',
+    `💬 Can't make it during the collection hours? Need any help or have any questions? WhatsApp us at https://wa.me/6589610626 (8961 0626) and we'll be happy to assist.`,
+    '',
+    `🐶 And when you're here, expect a warm hello from our Security Officer, Samosa (if he is awake and not busy demanding treats 😆).`,
+    '',
+    `📸 Follow our adventures on Instagram:`,
+    `instagram.com/samosa_the_t.rex`,
+    `instagram.com/thebonpet`,
+  ];
+  signoff = [
+    `Thank you for supporting our small business 💛 Every order means the world to us, and we can't wait for your pup to enjoy their goodies!`,
+    '',
+    `Love,`,
+    `The Bon Pet Team 🐾`,
+  ];
+} else {
+  lines = [
+    `Hi ${o.first_name}! 🐾`,
+    '',
+    `Your order ${o.order_name} is packed and ready for self-collection 🎉`,
+    '',
+    `📍 *Address:* 5 Siglap Road, Lobby K (Mandarin Gardens Condo), unit #17-38, Singapore 448908`,
+    '',
+    `❄️ Look for the pack labeled with your order ID *${o.order_name}* in the *WHITE freezer*`,
+    `ℹ️ Please skip the *ORANGE freezer*, it's not part of the pickup`,
+    '',
+    `A few quick notes:`,
+    `🙏 *Please collect within 3 days of this message.* Our freezer at the pickup point is small, so we really need every pack out fast to make room for the next batch`,
+    `💬 If 3 days doesn't work for you, just reply and let us know, we'll figure something out together`,
+    `✅ The freezer is accessible 24/7, pop by anytime`,
+    `✅ The pack itself is a cooler bag, just get it into your home freezer within 2-3 hours of pickup`,
+    `✅ Once frozen, good for up to 1 year`,
+  ];
+  signoff = [
+    `Any questions, just reply here. Thanks so much for choosing us 💛`,
+    `❤️ The Bon Pet team`,
+  ];
+}
 
 if (ctx.extra_note) {
   lines.push('', ctx.extra_note);
 }
 
-lines.push(
-  '',
-  `Any questions, just reply here. Thanks so much for choosing us 💛`,
-  `❤️ The Bon Pet team`,
-);
+lines.push('', ...signoff);
 
 return [{
   json: {
     ...ctx,
     target_phone: o.phone,
     message: lines.join('\n'),
+    pickup_point: isCCK ? 'cck' : 'siglap',
   }
 }];
-"""
+""".replace("__SHOP__", SHOPIFY_SHOP).replace("__API_VERSION__", SHOPIFY_API_VERSION).replace("__SHOPIFY_TOKEN__", SHOPIFY_TOKEN)
 
 # ───────────────────────── Code: Build Telegram Replies ─────────────────────────
 BUILD_NO_MATCH_JS = r"""const ctx = $('Parse Input').first().json;
@@ -223,7 +288,7 @@ return [{ json: {
 }}];
 """
 
-# Shopify fulfill — GraphQL lookup + fulfillmentCreateV2. onError=continueRegularOutput
+# Shopify fulfill - GraphQL lookup + fulfillmentCreateV2. onError=continueRegularOutput
 # so a Shopify failure does NOT block the WA success reply.
 SHOPIFY_FULFILL_JS = r"""const orderName = $('Match Order').first().json.order.order_name;  // "#3298"
 const URL = `https://__SHOP__/admin/api/__API_VERSION__/graphql.json`;
