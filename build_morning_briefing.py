@@ -7,7 +7,7 @@ import urllib.request
 import urllib.error
 
 from _notify import telegram_send_node, telegram_launchcycle_node
-from _sent_log import read_global_sent_log_node, filter_recent_sent_log_node
+from _sent_log import read_global_sent_log_node, native_filter_recent_sent_log_node
 import subprocess
 
 API = "https://n8n.thebonpet.com/api/v1"
@@ -521,7 +521,7 @@ def build():
     )
 
     read_wa_log = read_global_sent_log_node([480, 800])
-    filter_wa = filter_recent_sent_log_node([640, 800])
+    filter_wa = native_filter_recent_sent_log_node([640, 800])
     merge = merge_node("Merge Fetches", [880, 400], 4)
     aggregate = code_node("Aggregate & Format", [960, 400], AGGREGATE_JS)
 

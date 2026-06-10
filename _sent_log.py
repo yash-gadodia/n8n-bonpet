@@ -77,6 +77,44 @@ def filter_recent_sent_log_node(position, name="Filter Recent Sent Log", days=14
     }
 
 
+def native_filter_recent_sent_log_node(position, name="Filter Recent Sent Log", days=14):
+    """Native Filter node variant of filter_recent_sent_log_node.
+
+    Use this one for big logs: a Code-node filter still copies EVERY input item
+    to the task-runner process before filtering (that copy OOM-killed the pod
+    when wa_sent_log hit 83k rows on 2026-06-10). The native Filter node runs
+    in the main process, so only the surviving rows ever reach a runner.
+
+    alwaysOutputData so zero recent rows still produces an (empty) item and
+    downstream Code nodes execute. The condition is a pure JS boolean (not a
+    dateTime operator) because even loose typeValidation hard-errors on blank
+    sent_at cells ("Conversion error: the string '' can't be converted to a
+    dateTime") and the 83k-row log has blank gap rows. Date.parse of blank or
+    garbage yields NaN, the comparison is false, the row is dropped.
+    """
+    cutoff_ms = str(days) + " * 24 * 60 * 60 * 1000"
+    return {
+        "parameters": {
+            "conditions": {
+                "options": {"caseSensitive": True, "leftValue": "",
+                            "typeValidation": "loose", "version": 2},
+                "conditions": [{
+                    "id": str(uuid.uuid4()),
+                    "leftValue": "={{ Date.parse($json.sent_at || '') > (Date.now() - " + cutoff_ms + ") }}",
+                    "rightValue": "",
+                    "operator": {"type": "boolean", "operation": "true", "singleValue": True},
+                }],
+                "combinator": "and",
+            },
+            "options": {},
+        },
+        "id": str(uuid.uuid4()), "name": name,
+        "type": "n8n-nodes-base.filter", "typeVersion": 2,
+        "position": position,
+        "alwaysOutputData": True,
+    }
+
+
 def append_global_sent_log_node(position, name="Log Global Sent"):
     """Google Sheets append node. Assumes upstream items carry the 6 column fields
     (phone, workflow, template, sent_at, order_id, notes) at the top level of json.

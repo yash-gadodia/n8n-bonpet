@@ -16,7 +16,7 @@ import urllib.error
 from _notify import telegram_send_node, telegram_launchcycle_node
 import subprocess
 from _sent_log import (
-    read_global_sent_log_node, filter_recent_sent_log_node,
+    read_global_sent_log_node, native_filter_recent_sent_log_node,
     append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
 
@@ -503,7 +503,7 @@ def build():
     }
 
     read_global = read_global_sent_log_node([480, 800])
-    filter_global = filter_recent_sent_log_node([640, 800])
+    filter_global = native_filter_recent_sent_log_node([640, 800])
 
     merge = {
         "parameters": {"numberInputs": 4},

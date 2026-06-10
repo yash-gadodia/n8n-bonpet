@@ -8,6 +8,7 @@ Architecture:
   Schedule (hourly :17) ┐
                         ├→ Read Checkouts → Read Customers (executeOnce)
   Manual Webhook       ┘    → Read Global Sent Log (executeOnce)
+                              → Filter Recent Sent Log (14d, native)
                               → Compute Candidates → Send WA → Skip Header
                                 → Log Global Sent
 
@@ -22,7 +23,8 @@ Cron fires :17 not :00 to avoid the OOM-prone hour-boundary cluster.
 """
 import json, uuid, os, subprocess, urllib.request, urllib.error
 from _sent_log import (
-    read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
+    read_global_sent_log_node, append_global_sent_log_node,
+    native_filter_recent_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
 from _blacklist import BLACKLIST_JS_SNIPPET
 
@@ -78,7 +80,7 @@ for (const c of customers) {
 // Already-sent dedup: wa_sent_log entries where workflow='abandoned_cart',
 // keyed by order_id (which stores the checkout_token).
 const ALREADY_SENT_TOKENS = new Set();
-for (const it of $('Read Global Sent Log').all()) {
+for (const it of $('Filter Recent Sent Log').all()) {
   const s = it.json;
   if (String(s.workflow || '').toLowerCase() === 'abandoned_cart' && s.order_id) {
     ALREADY_SENT_TOKENS.add(String(s.order_id));
@@ -302,20 +304,24 @@ read_checkouts = gs_read_node("Read Checkouts", CHECKOUTS_GID, "checkouts", [240
 read_customers = gs_read_node("Read Customers", CUSTOMERS_GID, "customers", [480, 200])
 read_customers["executeOnce"] = True
 read_global = read_global_sent_log_node([720, 200])
+# Native (main-process) filter: keeps the 83k-row log out of the task runner.
+# COOLDOWN_JS_SNIPPET and the token-dedup loop both read from this node.
+filter_recent = native_filter_recent_sent_log_node([840, 200])
 compute = compute_node()
 send_wa = send_wa_node()
 skip_header = skip_header_node()
 log_global = append_global_sent_log_node([1680, 300])
 
 nodes = [schedule, webhook, read_checkouts, read_customers, read_global,
-         compute, send_wa, skip_header, log_global]
+         filter_recent, compute, send_wa, skip_header, log_global]
 
 connections = {
     schedule["name"]:       {"main": [[{"node": read_checkouts["name"], "type": "main", "index": 0}]]},
     webhook["name"]:        {"main": [[{"node": read_checkouts["name"], "type": "main", "index": 0}]]},
     read_checkouts["name"]: {"main": [[{"node": read_customers["name"], "type": "main", "index": 0}]]},
     read_customers["name"]: {"main": [[{"node": read_global["name"], "type": "main", "index": 0}]]},
-    read_global["name"]:    {"main": [[{"node": compute["name"], "type": "main", "index": 0}]]},
+    read_global["name"]:    {"main": [[{"node": filter_recent["name"], "type": "main", "index": 0}]]},
+    filter_recent["name"]:  {"main": [[{"node": compute["name"], "type": "main", "index": 0}]]},
     compute["name"]:        {"main": [[{"node": send_wa["name"], "type": "main", "index": 0}]]},
     send_wa["name"]:        {"main": [[{"node": skip_header["name"], "type": "main", "index": 0}]]},
     skip_header["name"]:    {"main": [[{"node": log_global["name"], "type": "main", "index": 0}]]},
