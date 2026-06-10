@@ -180,7 +180,7 @@ def append_node():
         "id": str(uuid.uuid4()),
         "name": "Append to Orders DB",
         "type": "n8n-nodes-base.googleSheets",
-        "typeVersion": 4.7,
+        "typeVersion": 4.5,
         "position": [480, 0],
         "credentials": {"googleSheetsOAuth2Api": GS_CRED},
     }
