@@ -279,7 +279,7 @@ def build():
             "options": {},
         },
         "id": uid(), "name": "Read Customers Tab",
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": [480, 350],
         "credentials": {"googleSheetsOAuth2Api": {"id": GS_CRED_ID, "name": GS_CRED_NAME}},
     }
