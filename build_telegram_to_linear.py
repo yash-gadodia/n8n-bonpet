@@ -230,8 +230,8 @@ Schema:
   "missing": ["title" | "assignee" | "priority", ...],
   // For "summary" — optional filter:
   "filter": { "category": "...", "stale": true, "assignee": "first name or email", "unassigned": true },
-  // For "packlist" — optional filter:
-  "pack_filter": { "self_collect_only": true | false },
+  // For "packlist" - optional filters:
+  "pack_filter": { "self_collect_only": true | false, "location": "cck" | "siglap" | null },
   // For "send_pickup_wa" — OPTIONAL: list of specific order numbers (as integers, NO # prefix).
   // OMIT or set to null if user wants ALL unfulfilled self-collect orders.
   // Include ONLY if user explicitly names order numbers.
@@ -274,6 +274,7 @@ Routing:
    - "what's pending pickup?", "orders waiting for self collection"
    - DEFAULT pack_filter.self_collect_only = true. NinjaVan / cold-chain orders are packed by the Pet Axis manufacturer, not the user — so plain "what do I need to pack?" should ONLY show self-collection orders.
    - Set pack_filter.self_collect_only = false ONLY if the user explicitly asks for all orders: "all orders", "every order", "include delivery", "include ninjavan", "include njv", "show ninjavan orders", "everything unfulfilled".
+   - pack_filter.location: if the user names a pickup point, set it. "cck" / "chandani" / "choa chu kang" / "681810" -> "cck"; "siglap" / "448908" -> "siglap"; otherwise null. A pickup-point filter only applies to self-collect orders, so when a location is set, also set self_collect_only = true even if the user said "all" (e.g. "what are all the cck orders to pack" -> location "cck", self_collect_only true).
 - "update" when user wants to MODIFY an existing issue (mentioned by ID like TBP-23, "issue 23", or just "23"):
    - "mark TBP-23 done", "close TBP-9", "TBP-19 is done"  → state: Done
    - "move TBP-31 to in progress", "start TBP-11"          → state: In Progress
@@ -715,7 +716,13 @@ PACKLIST_FORMAT_JS = r"""// Format the WMS unfulfilled-orders response for Teleg
 const ctx = $('Parse Intent').first().json._ctx;
 const intentParsed = $('Parse Intent').first().json.parsed || {};
 const pf = intentParsed.pack_filter || {};
-const selfOnly = pf.self_collect_only === true;
+let selfOnly = pf.self_collect_only === true;
+const POSTAL = { cck: '681810', siglap: '448908' };
+const LOCLABEL = { cck: 'CCK (Choa Chu Kang)', siglap: 'Siglap' };
+const CHANDANI_GROUP = -1004221528278;
+let loc = (pf.location || '').toLowerCase();
+if (!loc && Number(ctx.chat_id) === CHANDANI_GROUP) loc = 'cck';
+if (loc && POSTAL[loc]) selfOnly = true;
 
 // OMS unfulfilled orders come from "Fetch WMS Orders".
 const resp = $('Fetch WMS Orders').first().json;
@@ -747,6 +754,9 @@ try {
 
 if (selfOnly) {
   orders = orders.filter(o => String(o.delivery_method || '').toUpperCase() === 'SELF_COLLECTION');
+}
+if (loc && POSTAL[loc]) {
+  orders = orders.filter(o => String(o.pickup_postal_code || '') === POSTAL[loc]);
 }
 
 // Sort ascending by pickup_date (nulls last)
@@ -788,7 +798,7 @@ for (const o of orders) {
 }
 
 const lines = [];
-const heading = selfOnly ? '📦 *Unfulfilled Self-Collection Orders*' : '📦 *Unfulfilled Orders — Packlist*';
+const heading = (loc && LOCLABEL[loc]) ? `📦 *Pickup Queue · ${LOCLABEL[loc]}*` : (selfOnly ? '📦 *Unfulfilled Self-Collection Orders*' : '📦 *Unfulfilled Orders · Packlist*');
 lines.push(heading);
 if (syncWarning) {
   lines.push(syncWarning);

@@ -32,9 +32,9 @@ YASH_USERNAME = "yashgadodia"
 YASH_DM_ID = 166637821                        # Yash's private chat with @weslee_bot
 
 # CCK (Chandani)
-CHANDANI_CHAT_ID = "-5033434144"             # "Chandani X The Bon Pet" group
+CHANDANI_CHAT_ID = "-1004221528278"          # "Chandani X The Bon Pet" supergroup (migrated from -5033434144)
 CHANDANI_USERNAME = "chandkiraat"            # @-tag in her group
-CHANDANI_DM_ID = None                         # set after she /start's @weslee_bot (then redeploy)
+CHANDANI_DM_ID = 579742150                   # Chandani's private chat with @weslee_bot
 
 # Launch Cycle (external advisory agency) - visibility copy of every self-collect order
 LAUNCHCYCLE_CHAT_ID = "-5177312185"          # "Launch Cycle X The Bon Pet" group
@@ -101,6 +101,9 @@ if (!fullName) {
 if (!phone) phone = normalizePhone((body.customer || {}).phone || body.phone || '') || '(no phone)';
 if (!email) email = (body.customer || {}).email || body.email || '';
 
+const phoneDigits = String(phone || '').replace(/[^0-9]/g, '');
+const waLink = phoneDigits.length >= 8 ? `https://wa.me/${phoneDigits}` : '';
+
 // Delivery Date from note_attributes (Bon Pet's pickup-date field)
 const deliveryDate = ((body.note_attributes || []).find(a => a.name === 'Delivery Date') || {}).value || '(not set)';
 
@@ -120,7 +123,7 @@ const createdSgt = new Date(body.created_at || Date.now()).toLocaleString('en-SG
 });
 
 // Shared order summary block, reused across the group ping(s) + IC DM.
-const summary = `👤 *${fullName}* · ${phone}${email ? '\n📧 ' + email : ''}
+const summary = `👤 *${fullName}* · ${phone}${waLink ? '\n💬 message buyer: ' + waLink : ''}${email ? '\n📧 ' + email : ''}
 📅 Pickup: *${deliveryDate}*
 💰 ${currency} $${total}
 
