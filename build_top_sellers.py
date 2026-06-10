@@ -275,7 +275,7 @@ def build():
         "id": uid(),
         "name": "Mon 9:10 AM SGT",
         "type": "n8n-nodes-base.scheduleTrigger",
-        "typeVersion": 1.3,
+        "typeVersion": 1.2,
         "position": [0, 400],
     }
 

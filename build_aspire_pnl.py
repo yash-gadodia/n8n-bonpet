@@ -304,7 +304,7 @@ def build():
     weekly = {
         "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": "30 9 * * 1"}]}},
         "id": uid(), "name": "Weekly Trigger",
-        "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.3,
+        "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2,
         "position": [0, 250],
     }
     manual = {
@@ -397,7 +397,7 @@ def build():
     merge = {
         "parameters": {"numberInputs": 3},
         "id": uid(), "name": "Merge Data",
-        "type": "n8n-nodes-base.merge", "typeVersion": 3.1,
+        "type": "n8n-nodes-base.merge", "typeVersion": 3,
         "position": [1440, 350],
     }
 

@@ -226,7 +226,7 @@ def gs_read_node(name, pos, gid):
             "options": {},
         },
         "id": uid(), "name": name,
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": pos,
         "credentials": {"googleSheetsOAuth2Api": {"id": GS_CRED_ID, "name": GS_CRED_NAME}},
         "executeOnce": True,
@@ -274,7 +274,7 @@ def build():
     merge = {
         "parameters": {"numberInputs": 3},
         "id": uid(), "name": "Merge Reads",
-        "type": "n8n-nodes-base.merge", "typeVersion": 3.1,
+        "type": "n8n-nodes-base.merge", "typeVersion": 3,
         "position": [480, 300],
     }
 
@@ -295,7 +295,7 @@ def build():
             "options": {},
         },
         "id": uid(), "name": "Should Send?",
-        "type": "n8n-nodes-base.if", "typeVersion": 2.3,
+        "type": "n8n-nodes-base.if", "typeVersion": 2.2,
         "position": [960, 300],
     }
 

@@ -265,7 +265,7 @@ def merge_node(name, pos, n_inputs):
         "id": uid(),
         "name": name,
         "type": "n8n-nodes-base.merge",
-        "typeVersion": 3.1,
+        "typeVersion": 3,
         "position": pos,
     }
 
@@ -309,7 +309,7 @@ def build():
         "id": uid(),
         "name": "Daily 9AM SGT",
         "type": "n8n-nodes-base.scheduleTrigger",
-        "typeVersion": 1.3,
+        "typeVersion": 1.2,
         "position": [0, 400],
     }
 

@@ -289,7 +289,7 @@ def build():
             "rule": {"interval": [{"field": "cronExpression", "expression": "0 9 * * 3"}]}
         },
         "id": uid(), "name": "Wed 9 AM SGT",
-        "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.3,
+        "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2,
         "position": [0, 300],
     }
 
@@ -317,7 +317,7 @@ def build():
                 "options": {},
             },
             "id": uid(), "name": name,
-            "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+            "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
             "position": pos,
             "credentials": {"googleSheetsOAuth2Api": {"id": GS_CRED_ID, "name": GS_CRED_NAME}},
         }
@@ -329,7 +329,7 @@ def build():
     merge = {
         "parameters": {"numberInputs": 3},
         "id": uid(), "name": "Merge Reads",
-        "type": "n8n-nodes-base.merge", "typeVersion": 3.1,
+        "type": "n8n-nodes-base.merge", "typeVersion": 3,
         "position": [480, 400],
     }
 

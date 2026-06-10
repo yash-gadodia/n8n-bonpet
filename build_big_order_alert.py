@@ -303,7 +303,7 @@ def build():
             "options": {},
         },
         "id": uid(), "name": f"Total >= S${BIG_ORDER_THRESHOLD_SGD}?",
-        "type": "n8n-nodes-base.if", "typeVersion": 2.3,
+        "type": "n8n-nodes-base.if", "typeVersion": 2.2,
         "position": [240, 300],
     }
 
@@ -321,7 +321,7 @@ def build():
             "options": {},
         },
         "id": uid(), "name": "Read Customers Tab",
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7,
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
         "position": [480, 300],
         "credentials": {"googleSheetsOAuth2Api": {"id": GS_CRED_ID, "name": GS_CRED_NAME}},
     }
@@ -358,7 +358,7 @@ def build():
             "options": {},
         },
         "id": uid(), "name": "Has Customer Phone?",
-        "type": "n8n-nodes-base.if", "typeVersion": 2.3,
+        "type": "n8n-nodes-base.if", "typeVersion": 2.2,
         "position": [960, 600],
     }
 
@@ -377,7 +377,7 @@ def build():
             "options": {},
         },
         "id": uid(), "name": "Not a Subscription?",
-        "type": "n8n-nodes-base.if", "typeVersion": 2.3,
+        "type": "n8n-nodes-base.if", "typeVersion": 2.2,
         "position": [1200, 600],
     }
 
@@ -396,7 +396,7 @@ def build():
             "options": {},
         },
         "id": uid(), "name": "Not in Global Cooldown?",
-        "type": "n8n-nodes-base.if", "typeVersion": 2.3,
+        "type": "n8n-nodes-base.if", "typeVersion": 2.2,
         "position": [1320, 600],
     }
 

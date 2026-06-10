@@ -165,7 +165,7 @@ def schedule_node():
         "id": uid(),
         "name": "Daily 9:30AM SGT",
         "type": "n8n-nodes-base.scheduleTrigger",
-        "typeVersion": 1.3,
+        "typeVersion": 1.2,
         "position": [0, 200],
     }
 

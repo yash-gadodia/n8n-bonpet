@@ -272,7 +272,7 @@ def build():
         "id": uid(),
         "name": "Daily 6PM SGT",
         "type": "n8n-nodes-base.scheduleTrigger",
-        "typeVersion": 1.3,
+        "typeVersion": 1.2,
         "position": [0, 300],
     }
 

@@ -156,7 +156,7 @@ def build_refunds_ingest():
             "options": {},
         },
         "id": str(uuid.uuid4()), "name": "Append to Refunds Tab",
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7, "position": [480, 0],
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5, "position": [480, 0],
         "credentials": {"googleSheetsOAuth2Api": GS_CRED},
     }
     nodes = [webhook, parse, append]

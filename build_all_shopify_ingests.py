@@ -249,7 +249,7 @@ def build_ingest(spec):
             "options": {},
         },
         "id": str(uuid.uuid4()), "name": f"Append to {spec['tab']}",
-        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.7, "position": [480, 0],
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5, "position": [480, 0],
         "credentials": {"googleSheetsOAuth2Api": GS_CRED},
     }
     nodes = [webhook, parse, append]
