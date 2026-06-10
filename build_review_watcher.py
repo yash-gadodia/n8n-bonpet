@@ -453,7 +453,9 @@ def customer_wa_node(name, pos):
 def build():
     schedule = {
         # Stagger off HH:00 to avoid memory pressure when other crons cluster.
-        "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": "7 * * * *"}]}},
+        # :37 not :07 — Sub Reactivation fires daily at 18:07 and both crashed
+        # together (OOM) on 2026-06-08; :17 is the Abandoned Cart Sweeper.
+        "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": "37 * * * *"}]}},
         "id": uid(), "name": "Hourly",
         "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2,
         "position": [0, 400],
