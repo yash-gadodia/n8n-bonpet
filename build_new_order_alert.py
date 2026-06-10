@@ -46,6 +46,18 @@ const ordersCount = Number((body.customer || {}).orders_count || 1);
 
 // ── Delivery method (from shipping_lines.title , matches OMS derivation) ──
 const shippingLines = body.shipping_lines || [];
+
+// Self-collect orders are handled by the dedicated "Self-Collect Order Alert"
+// (routes to the right pickup-point group + tags the IC). Skip them here so they
+// don't get a duplicate generic ping in the main thread. Match ANY shipping line.
+const isSelfCollect = shippingLines.some(s => {
+  const t = String(s.title || '').toLowerCase();
+  const c = String(s.code || '').toLowerCase();
+  return t.includes('self-collect') || t.includes('self collect') || t.includes('self-collection') ||
+         c.includes('self-collect') || c.includes('self-collection');
+});
+if (isSelfCollect) return [];
+
 const shipTitle = String((shippingLines[0] || {}).title || '').toLowerCase();
 let deliveryMethod = 'NinjaVan';
 let deliveryEmoji = '📦';
