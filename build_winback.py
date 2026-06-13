@@ -38,6 +38,7 @@ GS_CRED_NAME = "Google Sheets account"
 SHEET_ID = "1GP0RBDnvl-tHBDRv6DRdrungM2BXM5Z-LnQxmzEeuXI"
 ORDERS_TAB_GID = 0
 CUSTOMERS_TAB_GID = 100100
+SUBSCRIBERS_TAB_GID = 700700  # live subscriber contracts (webhook-updated)
 WINBACK_SENT_TAB_GID = 1248726917  # created by setup_winback_sent_tab.py
 
 WA_URL = "https://api.thebonpet.com/whatsapp/send"
@@ -78,8 +79,11 @@ def team_wa_node(name, pos, phone):
 
 COMPUTE_ELIGIBLE_JS = r"""// Dormant customers with daysSince >= MIN_DAYS and not already in winback_sent tab.
 // Sorted oldest-first (longest lapsed = priority), capped at DAILY_CAP per run.
-// Per 6-week subscription rule: daysSince >= 42 cannot be an active subscriber
-// → safe to message without checking the subscribers tab.
+// NOTE: order-recency is NOT a reliable subscriber test. A customer can hold an
+// ACTIVE subscription contract while their last ORDER in the orders tab is >42d old
+// (renewal not yet billed / not synced). We therefore EXCLUDE anyone with an active
+// contract via the subscribers tab — same guard as build_sub_reactivation.py.
+// (Verified 2026-06-14: 5 active-contract holders were winback-eligible without it.)
 const MIN_DAYS = __MIN__;
 const DAILY_CAP = __CAP__;
 const DRY_RUN = __DRY_RUN__;
@@ -88,6 +92,7 @@ const YASH_PHONE = '+6581394225';
 const ordersRows   = $('Read Orders Tab').all();
 const customerRows = $('Read Customers Tab').all();
 const sentRows     = $('Read Winback Sent Tab').all();
+const subRows      = $('Read Subscribers Tab').all();
 
 function parseDate(s) {
   if (!s) return null;
@@ -117,6 +122,19 @@ for (const r of sentRows) {
   if (e) sentEmails.add(e);
 }
 
+// Active-subscriber guard: any customer holding an ACTIVE contract is a current
+// subscriber and must never get a "we miss you" winback, even if their last order
+// looks old. Excludes by email AND customer_id.
+const activeEmails = new Set();
+const activeCustIds = new Set();
+for (const r of subRows) {
+  if (String(r.json.status || '').toUpperCase() !== 'ACTIVE') continue;
+  const e = normEmail(r.json.email);
+  const cid = String(r.json.customer_id || '').trim();
+  if (e) activeEmails.add(e);
+  if (cid) activeCustIds.add(cid);
+}
+
 const lastByEmail = new Map();
 for (const r of ordersRows) {
   const j = r.json;
@@ -143,6 +161,7 @@ const stats = {
   no_email: 0,
   no_orders_match: 0,
   too_recent: 0,
+  skipped_active_sub: 0,
   already_sent: 0,
   no_phone: 0,
   invalid_phone: 0,
@@ -159,6 +178,12 @@ for (const c of customerRows) {
   const email = normEmail(j.email);
   if (!email) { stats.no_email++; continue; }
   if (sentEmails.has(email)) { stats.already_sent++; continue; }
+
+  const custId = String(j.customer_id || '').trim();
+  if (activeEmails.has(email) || (custId && activeCustIds.has(custId))) {
+    stats.skipped_active_sub++;
+    continue;
+  }
 
   const last = lastByEmail.get(email);
   if (!last) { stats.no_orders_match++; continue; }
@@ -218,6 +243,7 @@ const headerMsg = `🔁 *Win-back — ${modeTag}*\n📅 ${new Date().toISOString
   `• No email: ${stats.no_email}\n` +
   `• No order match: ${stats.no_orders_match}\n` +
   `• Too recent (<${MIN_DAYS}d): ${stats.too_recent}\n` +
+  `• Active subscriber (excluded): ${stats.skipped_active_sub}\n` +
   `• Already messaged: ${stats.already_sent}\n` +
   `• No phone: ${stats.no_phone}\n` +
   `• Invalid phone: ${stats.invalid_phone}\n` +
@@ -431,9 +457,10 @@ def build():
     customers    = read_sheet_node("Read Customers Tab",    [240, 500], CUSTOMERS_TAB_GID)
     winback_sent = read_sheet_node("Read Winback Sent Tab", [240, 700], WINBACK_SENT_TAB_GID)
     read_global  = read_global_sent_log_node([240, 900])
+    subscribers  = read_sheet_node("Read Subscribers Tab",  [240, 1100], SUBSCRIBERS_TAB_GID)
 
     merge = {
-        "parameters": {"numberInputs": 4},
+        "parameters": {"numberInputs": 5},
         "id": uid(), "name": "Merge Reads",
         "type": "n8n-nodes-base.merge", "typeVersion": 3,
         "position": [480, 500],
@@ -467,7 +494,7 @@ def build():
         for i, (name, phone) in enumerate(TEAM_RECIPIENTS)
     ]
 
-    nodes = [schedule, manual, orders, customers, winback_sent, read_global, merge,
+    nodes = [schedule, manual, orders, customers, winback_sent, read_global, subscribers, merge,
              compute, format_msg, send, drop_hdr, log_sent, log_global,
              pass_header, send_telegram, send_telegram_lc, *team_wa_sends]
 
@@ -477,17 +504,20 @@ def build():
             {"node": customers["name"],    "type": "main", "index": 0},
             {"node": winback_sent["name"], "type": "main", "index": 0},
             {"node": read_global["name"],  "type": "main", "index": 0},
+            {"node": subscribers["name"],  "type": "main", "index": 0},
         ]]},
         manual["name"]:    {"main": [[
             {"node": orders["name"],       "type": "main", "index": 0},
             {"node": customers["name"],    "type": "main", "index": 0},
             {"node": winback_sent["name"], "type": "main", "index": 0},
             {"node": read_global["name"],  "type": "main", "index": 0},
+            {"node": subscribers["name"],  "type": "main", "index": 0},
         ]]},
         orders["name"]:       {"main": [[{"node": merge["name"], "type": "main", "index": 0}]]},
         customers["name"]:    {"main": [[{"node": merge["name"], "type": "main", "index": 1}]]},
         winback_sent["name"]: {"main": [[{"node": merge["name"], "type": "main", "index": 2}]]},
         read_global["name"]:  {"main": [[{"node": merge["name"], "type": "main", "index": 3}]]},
+        subscribers["name"]:  {"main": [[{"node": merge["name"], "type": "main", "index": 4}]]},
         merge["name"]:        {"main": [[{"node": compute["name"], "type": "main", "index": 0}]]},
         compute["name"]:      {"main": [[{"node": format_msg["name"], "type": "main", "index": 0}]]},
         format_msg["name"]:   {"main": [[
