@@ -236,6 +236,10 @@ Schema:
   // OMIT or set to null if user wants ALL unfulfilled self-collect orders.
   // Include ONLY if user explicitly names order numbers.
   "order_numbers": [3299, 3300],
+  // For "send_pickup_wa" — OPTIONAL pickup-point filter. "cck" | "siglap" | null.
+  // Set ONLY when the user limits the blast to one pickup point (e.g. "mark all siglap
+  // self collect orders as fulfilled"). OMIT/null when they mean every self-collect order.
+  "location": "cck" | "siglap" | null,
   // For "update" — required identifier + at least one field in updates:
   "identifier": "TBP-23",
   "updates": {
@@ -266,6 +270,13 @@ Routing:
        - "fire wa notif for all self collection"     → omit order_numbers
        - "send wa notif"                             → omit order_numbers
        - "let all customers know"                    → omit order_numbers
+   - **location extraction:** If the user limits the blast to one pickup point, set "location" ("cck" or "siglap"). Same mapping as packlist: "cck"/"chandani"/"choa chu kang"/"681810" -> "cck"; "siglap"/"448908" -> "siglap". Otherwise OMIT/null. This filters the WMS list to just that point's orders, so a "siglap" blast NEVER touches CCK orders and vice-versa.
+       - "mark all siglap self collect orders as fulfilled"  -> location: "siglap" (omit order_numbers)
+       - "fire pickup ready for all cck orders"              -> location: "cck"
+       - "send wa to chandani's pickup orders"               -> location: "cck"
+       - "blast pickup ready for siglap"                     -> location: "siglap"
+       - "fire wa notif for all self collection" (no point)  -> omit location
+     Normally the user gives EITHER a location OR explicit order_numbers, not both.
    - Do NOT use this for: SINGLE-order pickup-ready tags ("order #3293 ready for self collection") — those are handled before Claude sees the message.
 - "packlist" when user is asking about PHYSICAL ORDERS that need to be PACKED / SHIPPED / FULFILLED (NOT Linear tickets). These hit the live OMS, not Linear. Triggers:
    - "what do I need to pack?", "what's left to pack?", "show me the packlist", "pack list"
@@ -917,6 +928,15 @@ if (wantedNums.length > 0) {
   orders = found;
 }
 
+// Filter by pickup point if the user limited the blast to one location.
+// A "siglap" command must NEVER fulfil CCK orders (and vice-versa). pickup_postal_code
+// is the authoritative per-order field returned by the OMS.
+const POSTAL = { cck: '681810', siglap: '448908' };
+const loc = String(parsed.location || '').toLowerCase();
+if (POSTAL[loc]) {
+  orders = orders.filter(o => String(o.pickup_postal_code || '') === POSTAL[loc]);
+}
+
 const baseReply = {
   chat_id: ctx.chat_id,
   message_thread_id: ctx.message_thread_id,
@@ -924,8 +944,9 @@ const baseReply = {
 };
 
 if (orders.length === 0 && unmatched.length === 0) {
+  const where = POSTAL[loc] ? ` at ${loc.toUpperCase()}` : '';
   return [{ json: { ...baseReply,
-    text: '🎉 No unfulfilled self-collect orders — nothing to send.',
+    text: `🎉 No unfulfilled self-collect orders${where}, nothing to send.`,
   } }];
 }
 if (orders.length === 0 && unmatched.length > 0) {
