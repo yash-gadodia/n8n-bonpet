@@ -109,6 +109,10 @@ const REMIND_2_OFFSET_MIN = 3;
 const REMIND_2_OFFSET_MAX = 5;
 // Absolute safety floor — never remind someone who just ordered regardless of computed cadence
 const MIN_DAYS_SINCE_LAST = 7;
+// Daily fan-out ceiling — bounds a pathological run (e.g. first run over a backlog) so we
+// never blast hundreds of 3-burst sends at once and OOM the instance. Narrow reminder
+// windows mean this rarely binds; most-overdue customers are kept first.
+const DAILY_CAP = 60;
 
 // After Merge (combine), $input holds both orders + subscribers interleaved.
 // Pull orders directly from Read Orders node for clarity.
@@ -138,12 +142,21 @@ const stats = {
   between_windows: 0,
   in_remind_2_window: 0,
   too_late: 0,
+  capped_out: 0,
 };
 
 const candidates = [];
 const sample_customers = [];
+let messagedCount = 0;
 
-for (const [key, custOrders] of ordersByKey) {
+// Most-overdue first (oldest last order) so the cap keeps the customers who need it most.
+const sortedEntries = Array.from(ordersByKey.entries()).sort((a, b) => {
+  const la = Math.max.apply(null, a[1].map(o => new Date(o.order_date).getTime()));
+  const lb = Math.max.apply(null, b[1].map(o => new Date(o.order_date).getTime()));
+  return la - lb;
+});
+
+for (const [key, custOrders] of sortedEntries) {
   custOrders.sort((a, b) => new Date(b.order_date) - new Date(a.order_date));
   const last = custOrders[0];
 
@@ -202,6 +215,10 @@ for (const [key, custOrders] of ordersByKey) {
   }
   if (sample_customers.length < 3) sample_customers.push({firstName, phone, daysSince, cadence, ordersCount: custOrders.length});
   if (!reminderNum) continue;
+
+  // Daily fan-out ceiling (per customer, not per burst).
+  if (messagedCount >= DAILY_CAP) { stats.capped_out++; continue; }
+  messagedCount++;
 
   // Cart link — use stored cart_link from order (was computed at ingest)
   const cartLink = last.cart_link || 'https://thebonpet.com/collections/all';
@@ -271,6 +288,7 @@ const diag = [
   `• Between windows: ${stats.between_windows}`,
   `• In reminder #2 window: ${stats.in_remind_2_window}`,
   `• Too late (churned?): ${stats.too_late}`,
+  `• Capped out (over daily ${DAILY_CAP}): ${stats.capped_out}`,
   ``,
   `🎯 *Candidates this run: ${candidates.length}*`,
 ];

@@ -29,6 +29,7 @@ GS_CRED_NAME = "Google Sheets account"
 SHEET_ID = "1GP0RBDnvl-tHBDRv6DRdrungM2BXM5Z-LnQxmzEeuXI"
 ORDERS_TAB_GID = 0
 CUSTOMERS_TAB_GID = 100100
+SUBSCRIBERS_TAB_GID = 700700  # live subscriber contracts (webhook-updated)
 
 WA_URL = "https://api.thebonpet.com/whatsapp/send"
 WA_KEY = subprocess.check_output(["security","find-generic-password","-a","thebonpet","-s","wa-api-key","-w"]).decode().strip()
@@ -78,6 +79,23 @@ const contractId = extractId(sub.id || sub.contract_id || sub.handle);
 
 if (!email) {
   return [{ json: { should_send: false, skip_reason: 'no email', contract_id: contractId } }];
+}
+
+// Multi-contract guard: a customer can hold several subscription contracts
+// (e.g. cat + dog). Pausing/cancelling ONE while another is still ACTIVE does
+// NOT mean they left us — never send "sorry to see you go" to a current
+// subscriber. Skip if ANY OTHER contract (different contract_id) is ACTIVE.
+const subRows = $('Read Subscribers Tab').all();
+const hasOtherActive = subRows.some(r => {
+  const j = r.json;
+  if (String(j.status || '').toUpperCase() !== 'ACTIVE') return false;
+  const rcid = extractId(j.contract_id || j.id || '');
+  if (rcid && rcid === contractId) return false; // ignore the contract that just changed
+  const remail = String(j.email || '').toLowerCase().trim();
+  return remail && remail === email;
+});
+if (hasOtherActive) {
+  return [{ json: { should_send: false, skip_reason: 'customer has another active contract', email, contract_id: contractId } }];
 }
 
 // Lookup customer in Customers tab (for phone + name)
@@ -267,12 +285,13 @@ def build():
         "position": [0, 300], "webhookId": WEBHOOK_PATH,
     }
 
-    read_customers = gs_read_node("Read Customers Tab", [240, 200], CUSTOMERS_TAB_GID)
-    read_orders    = gs_read_node("Read Orders Tab",    [240, 400], ORDERS_TAB_GID)
+    read_customers = gs_read_node("Read Customers Tab",   [240, 200], CUSTOMERS_TAB_GID)
+    read_orders    = gs_read_node("Read Orders Tab",      [240, 400], ORDERS_TAB_GID)
     read_global    = read_global_sent_log_node([240, 600])
+    read_subs      = gs_read_node("Read Subscribers Tab", [240, 800], SUBSCRIBERS_TAB_GID)
 
     merge = {
-        "parameters": {"numberInputs": 3},
+        "parameters": {"numberInputs": 4},
         "id": uid(), "name": "Merge Reads",
         "type": "n8n-nodes-base.merge", "typeVersion": 3,
         "position": [480, 300],
@@ -329,7 +348,7 @@ def build():
 
     log_global = append_global_sent_log_node([1440, 200])
 
-    nodes = [trigger, read_customers, read_orders, read_global, merge,
+    nodes = [trigger, read_customers, read_orders, read_global, read_subs, merge,
              lookup_format, should_send_if, send_customer, send_telegram,
              *team_wa_sends, log_global]
 
@@ -338,10 +357,12 @@ def build():
             {"node": read_customers["name"], "type": "main", "index": 0},
             {"node": read_orders["name"],    "type": "main", "index": 0},
             {"node": read_global["name"],    "type": "main", "index": 0},
+            {"node": read_subs["name"],      "type": "main", "index": 0},
         ]]},
         read_customers["name"]: {"main": [[{"node": merge["name"], "type": "main", "index": 0}]]},
         read_orders["name"]:    {"main": [[{"node": merge["name"], "type": "main", "index": 1}]]},
         read_global["name"]:    {"main": [[{"node": merge["name"], "type": "main", "index": 2}]]},
+        read_subs["name"]:      {"main": [[{"node": merge["name"], "type": "main", "index": 3}]]},
         merge["name"]:          {"main": [[{"node": lookup_format["name"], "type": "main", "index": 0}]]},
         lookup_format["name"]:  {"main": [[{"node": should_send_if["name"], "type": "main", "index": 0}]]},
         should_send_if["name"]: {"main": [
