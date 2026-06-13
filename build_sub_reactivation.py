@@ -221,12 +221,29 @@ for (const r of subRows) {
   });
 }
 
+// --- Active-subscriber guard set ---
+// A customer with ANY active contract is a current subscriber. Their OTHER
+// contracts (an old cancelled cat sub, a paused dog sub, etc.) must never pull
+// them into a "since you cancelled/paused" reactivation message. The staleness
+// window can't catch this on its own: an active 4-weekly sub's last order is
+// naturally 14-28 days old, landing right inside the cancelled window.
+// (Root cause of the 2026-06-13 active-subscriber mis-send.)
+const activeCustIds = new Set();
+const activeEmails  = new Set();
+for (const c of contracts.values()) {
+  if (c.status === 'ACTIVE') {
+    if (c.customer_id) activeCustIds.add(c.customer_id);
+    if (c.email)       activeEmails.add(c.email);
+  }
+}
+
 // --- Candidate selection ---
 const stats = {
   contracts_total:        contracts.size,
   candidates_paused:      0,
   candidates_cancelled:   0,
   skip_status:            0,
+  skip_has_active_sub:    0,
   skip_no_order_history:  0,
   skip_window:            0,
   skip_already_sent:      0,
@@ -258,6 +275,12 @@ for (const c of contracts.values()) {
     maxDays = CANCELLED_MAX_DAYS;
   } else {
     stats.skip_status++;
+    continue;
+  }
+
+  // Active-subscriber guard: skip if this customer holds ANY active contract.
+  if (activeCustIds.has(c.customer_id) || activeEmails.has(c.email)) {
+    stats.skip_has_active_sub++;
     continue;
   }
 
@@ -402,6 +425,7 @@ const headerMsg = `🔁 *Sub Reactivation — ${modeTag}*\n📅 ${new Date().toI
   `• Eligible paused (pre-cap): ${stats.candidates_paused}\n` +
   `• Eligible cancelled (pre-cap): ${stats.candidates_cancelled}\n` +
   `• Skip wrong status: ${stats.skip_status}\n` +
+  `• Skip active subscriber: ${stats.skip_has_active_sub}\n` +
   `• Skip no order history: ${stats.skip_no_order_history}\n` +
   `• Skip outside window: ${stats.skip_window}\n` +
   `• Skip already reactivated: ${stats.skip_already_sent}\n` +
