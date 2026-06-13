@@ -11,9 +11,16 @@ Pipeline: webhook -> Read Customers (enrich) -> Format Alert (fan out send-jobs)
 Customer PII (name+phone) is pulled from the Customer Orders DB Google Sheet
 (Customers tab gid 100100) because Shopify Basic blocks PII in Admin API payloads.
 """
-import json, uuid, os, urllib.request, urllib.error
+import json, uuid, os, subprocess, urllib.request, urllib.error
 
 API = "https://n8n.thebonpet.com/api/v1"
+
+# OMS (api.thebonpet.com) is the PII fallback when a brand-new customer isn't in the
+# Customers tab yet (Shopify Basic redacts customer/address PII from the webhook payload).
+WMS_PAT = subprocess.check_output(
+    ["security", "find-generic-password", "-a", "thebonpet", "-s", "wms-pat", "-w"]
+).decode().strip()
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 WF_NAME = "Self-Collect Order Alert - Telegram"
 WEBHOOK_PATH = "selfcollect-order-alert-9b3e1f7c2d"
 
@@ -49,15 +56,27 @@ const p = $('Shopify Webhook (orders/paid)').first().json;
 const body = p.body || p;
 
 const shippingLines = body.shipping_lines || [];
-const scLine = shippingLines.find(s => {
-  const t = String(s.title || '').toLowerCase();
-  const c = String(s.code || '').toLowerCase();
-  return t.includes('self-collect') || t.includes('self collect') || t.includes('self-collection') ||
-         c.includes('self-collect') || c.includes('self-collection');
+const isSelfCollectLine = s => {
+  const t = (String(s.title || '') + ' ' + String(s.code || '')).toLowerCase();
+  return t.includes('self-collect') || t.includes('self collect') || t.includes('self-collection');
+};
+const scLine = shippingLines.find(isSelfCollectLine);
+
+// An order can carry MULTIPLE shipping lines. A $0 "Self-Collection" line sometimes rides
+// alongside a real paid courier line (seen on $0 first-subscription orders) — that order is a
+// DELIVERY, not a pickup, so it must NOT fire a self-collect alert. Treat any non-self-collect
+// line that is either priced > 0 or named like a courier as the authoritative delivery method.
+const hasRealDelivery = shippingLines.some(s => {
+  if (isSelfCollectLine(s)) return false;
+  const t = (String(s.title || '') + ' ' + String(s.code || '')).toLowerCase();
+  const priced = parseFloat(s.price || '0') > 0;
+  return priced || t.includes('ninja') || t.includes('cold chain') ||
+         t.includes('lalamove') || t.includes('courier') || t.includes('delivery');
 });
 
-if (!scLine) {
-  return [{ json: { is_self_collect: false, skip_reason: 'not a self-collect order' } }];
+if (!scLine || hasRealDelivery) {
+  return [{ json: { is_self_collect: false,
+    skip_reason: !scLine ? 'not a self-collect order' : 'delivery order with phantom self-collect line' } }];
 }
 
 // Pickup point from the 6-digit postal in "Self-Collection - <postal>".
@@ -93,13 +112,32 @@ for (const c of $('Read Customers').all()) {
     break;
   }
 }
-// Fall back to webhook payload (rare, present only if Shopify happens to include it)
+// Fallback 1: Shopify webhook payload (rare under Shopify Basic — PII usually redacted).
 if (!fullName) {
   const cust = body.customer || {};
-  fullName = `${cust.first_name || ''} ${cust.last_name || ''}`.trim() || '(name not in Customers tab)';
+  fullName = `${cust.first_name || ''} ${cust.last_name || ''}`.trim();
 }
-if (!phone) phone = normalizePhone((body.customer || {}).phone || body.phone || '') || '(no phone)';
+if (!phone) phone = normalizePhone((body.customer || {}).phone || body.phone || '');
 if (!email) email = (body.customer || {}).email || body.email || '';
+// Fallback 2: OMS (api.thebonpet.com) — has name+phone for brand-new customers who aren't
+// in the Customers tab yet. This is what fixes "(name not in Customers tab) / (no phone)".
+if (!fullName || !phone) {
+  let omsOrders = [];
+  try { omsOrders = ($('Fetch OMS Order').first().json || {}).orders || []; } catch (e) {}
+  const want = String(orderName).replace(/^#/, '').trim();
+  const omsO = omsOrders.find(o => String(o.order_name || '').replace(/^#/, '').trim() === want);
+  if (omsO) {
+    if (!fullName) {
+      fullName = String(omsO.customer || omsO.shipping_name ||
+        `${omsO.customer_first_name || ''} ${omsO.customer_last_name || ''}`.trim() || '').trim();
+    }
+    if (!phone) phone = normalizePhone(omsO.shipping_phone || omsO.customer_contact || '');
+    if (!email) email = omsO.customer_email || '';
+  }
+}
+// Final placeholders only if every source missed.
+if (!fullName) fullName = '(name not in Customers tab)';
+if (!phone) phone = '(no phone)';
 
 const phoneDigits = String(phone || '').replace(/[^0-9]/g, '');
 const waLink = phoneDigits.length >= 8 ? `https://wa.me/${phoneDigits}` : '';
@@ -238,11 +276,38 @@ read_customers = {
     "executeOnce": True,
 }
 
+# PII fallback source: fetch this order from the OMS by order number. executeOnce so it fires
+# exactly once even though Read Customers emits many rows. retryOnFail gives the OMS a few
+# seconds to ingest a just-placed order before we give up.
+fetch_oms_order = {
+    "parameters": {
+        "method": "GET",
+        "url": "https://api.thebonpet.com/wms/orders",
+        "sendQuery": True,
+        "queryParameters": {"parameters": [
+            {"name": "search", "value": "={{ String((($('Shopify Webhook (orders/paid)').first().json.body) || $('Shopify Webhook (orders/paid)').first().json).order_number || '') }}"},
+            {"name": "limit", "value": "20"},
+        ]},
+        "sendHeaders": True,
+        "headerParameters": {"parameters": [
+            {"name": "Authorization", "value": f"Bearer {WMS_PAT}"},
+            {"name": "User-Agent", "value": UA},
+        ]},
+        "options": {},
+    },
+    "id": uid(), "name": "Fetch OMS Order",
+    "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+    "position": [480, 300],
+    "executeOnce": True,
+    "onError": "continueRegularOutput",
+    "retryOnFail": True, "maxTries": 3, "waitBetweenTries": 2000,
+}
+
 format_code = {
     "parameters": {"jsCode": FORMAT_JS},
     "id": uid(), "name": "Format Alert",
     "type": "n8n-nodes-base.code", "typeVersion": 2,
-    "position": [480, 300],
+    "position": [720, 300],
 }
 
 is_selfcollect_if = {
@@ -261,7 +326,7 @@ is_selfcollect_if = {
     },
     "id": uid(), "name": "Is Self-Collect?",
     "type": "n8n-nodes-base.if", "typeVersion": 2.2,
-    "position": [720, 300],
+    "position": [960, 300],
 }
 
 send_telegram = {
@@ -279,14 +344,15 @@ send_telegram = {
     },
     "id": uid(), "name": "Send Telegram (ops)",
     "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
-    "position": [960, 200],
+    "position": [1200, 200],
     "onError": "continueRegularOutput",
 }
 
-nodes = [webhook, read_customers, format_code, is_selfcollect_if, send_telegram]
+nodes = [webhook, read_customers, fetch_oms_order, format_code, is_selfcollect_if, send_telegram]
 connections = {
     webhook["name"]:           {"main": [[{"node": read_customers["name"], "type": "main", "index": 0}]]},
-    read_customers["name"]:    {"main": [[{"node": format_code["name"], "type": "main", "index": 0}]]},
+    read_customers["name"]:    {"main": [[{"node": fetch_oms_order["name"], "type": "main", "index": 0}]]},
+    fetch_oms_order["name"]:   {"main": [[{"node": format_code["name"], "type": "main", "index": 0}]]},
     format_code["name"]:       {"main": [[{"node": is_selfcollect_if["name"], "type": "main", "index": 0}]]},
     is_selfcollect_if["name"]: {"main": [
         [{"node": send_telegram["name"], "type": "main", "index": 0}],
