@@ -47,16 +47,26 @@ const ordersCount = Number((body.customer || {}).orders_count || 1);
 // ── Delivery method (from shipping_lines.title , matches OMS derivation) ──
 const shippingLines = body.shipping_lines || [];
 
-// Self-collect orders are handled by the dedicated "Self-Collect Order Alert"
-// (routes to the right pickup-point group + tags the IC). Skip them here so they
-// don't get a duplicate generic ping in the main thread. Match ANY shipping line.
-const isSelfCollect = shippingLines.some(s => {
-  const t = String(s.title || '').toLowerCase();
-  const c = String(s.code || '').toLowerCase();
-  return t.includes('self-collect') || t.includes('self collect') || t.includes('self-collection') ||
-         c.includes('self-collect') || c.includes('self-collection');
+// Self-collect orders are handled by the dedicated "Self-Collect Order Alert" (routes to the
+// right pickup-point group + tags the IC). Skip GENUINE pickups here so they don't also post a
+// generic (mislabeled "NinjaVan") ping. A pickup line is the Shopify pickup LOCATION name
+// (native local pickup, e.g. "Yash" / "Residential Point 1") or the legacy "Self-Collection -
+// <postal>" rate. Source: Shopify > Settings > Locations, current as of 2026-06-16.
+// Guard: a $0 pickup line can ride alongside a real courier line on $0 first-sub orders — that
+// is a DELIVERY, so DON'T skip it (let it show in the generic feed).
+const PICKUP_NAMES = ['yash', 'residential point 1', 'self-collection - 448908', 'self-collection - 681810'];
+const isPickupLine = s => {
+  const hay = (String(s.title || '') + ' ' + String(s.code || '')).toLowerCase();
+  return PICKUP_NAMES.some(n => hay.includes(n)) || /self.?collect/.test(hay);
+};
+const hasPickup = shippingLines.some(isPickupLine);
+const hasRealDelivery = shippingLines.some(s => {
+  if (isPickupLine(s)) return false;
+  const t = (String(s.title || '') + ' ' + String(s.code || '')).toLowerCase();
+  return parseFloat(s.price || '0') > 0 || t.includes('ninja') || t.includes('cold chain') ||
+         t.includes('lalamove') || t.includes('courier') || t.includes('delivery');
 });
-if (isSelfCollect) return [];
+if (hasPickup && !hasRealDelivery) return [];
 
 const shipTitle = String((shippingLines[0] || {}).title || '').toLowerCase();
 let deliveryMethod = 'NinjaVan';
