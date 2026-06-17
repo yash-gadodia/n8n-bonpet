@@ -29,10 +29,16 @@ TELEGRAM_WESLEE_THREAD_ID = 34253            # weslee thread (was "2" / ops thre
 TELEGRAM_TOKEN = open(os.path.expanduser("~/.telegram-weslee-bot-token")).read().strip()
 
 # ── Pickup points ──────────────────────────────────────────────────────────
-# Pickup point is encoded in the shipping title "Self-Collection - <postal>".
-#   448908 (or legacy bare "Self-Collection")  → Siglap   → Yash
-#   681810                                      → Choa Chu Kang (CCK) → Chandani
-CCK_POSTALS = ["681810"]                      # postal codes routed to Chandani's CCK point
+# Detection now matches the shipping-line title/code against each point's known names.
+# A pickup order's title is the Shopify pickup LOCATION name (native local pickup) OR the
+# legacy "Self-Collection - <postal>" custom-rate title. Keep both per point.
+#   Siglap (Yash)            → location "Yash"               (was "Self-Collection - 448908")
+#   Choa Chu Kang (Chandani) → location "Residential Point 1" (was "Self-Collection - 681810")
+# Source: Shopify > Settings > Locations, current as of 2026-06-16. Update on rename.
+PICKUP_POINTS = [
+    {"match": ["yash", "self-collection - 448908"], "point": "siglap", "postal": "448908"},
+    {"match": ["residential point 1", "self-collection - 681810"], "point": "cck", "postal": "681810"},
+]
 
 # Siglap (Yash)
 YASH_USERNAME = "yashgadodia"
@@ -56,18 +62,27 @@ const p = $('Shopify Webhook (orders/paid)').first().json;
 const body = p.body || p;
 
 const shippingLines = body.shipping_lines || [];
-const isSelfCollectLine = s => {
-  const t = (String(s.title || '') + ' ' + String(s.code || '')).toLowerCase();
-  return t.includes('self-collect') || t.includes('self collect') || t.includes('self-collection');
-};
-const scLine = shippingLines.find(isSelfCollectLine);
 
-// An order can carry MULTIPLE shipping lines. A $0 "Self-Collection" line sometimes rides
-// alongside a real paid courier line (seen on $0 first-subscription orders) — that order is a
-// DELIVERY, not a pickup, so it must NOT fire a self-collect alert. Treat any non-self-collect
-// line that is either priced > 0 or named like a courier as the authoritative delivery method.
+// Local-pickup points. The shipping-line title/code is the Shopify pickup LOCATION name
+// (native local pickup, e.g. "Yash") OR the legacy "Self-Collection - <postal>" custom rate.
+// Both map here. Source: Shopify > Settings > Locations (names current as of 2026-06-16).
+// Update this list if a pickup location is renamed.
+const PICKUP_POINTS = __PICKUP_POINTS__;
+const pickupFor = s => {
+  const hay = (String(s.title || '') + ' ' + String(s.code || '')).toLowerCase();
+  for (const p of PICKUP_POINTS) { if (p.match.some(m => hay.includes(m))) return p; }
+  if (/self.?collect/.test(hay)) return { point: 'siglap', postal: '448908' };  // legacy, unknown point
+  return null;
+};
+const scLine = shippingLines.find(pickupFor);
+const scPoint = scLine ? pickupFor(scLine) : null;
+
+// An order can carry MULTIPLE shipping lines. A $0 pickup line sometimes rides alongside a
+// real paid courier line (seen on $0 first-subscription orders) — that order is a DELIVERY,
+// not a pickup, so it must NOT fire a self-collect alert. Treat any non-pickup line that is
+// either priced > 0 or named like a courier as the authoritative delivery method.
 const hasRealDelivery = shippingLines.some(s => {
-  if (isSelfCollectLine(s)) return false;
+  if (pickupFor(s)) return false;
   const t = (String(s.title || '') + ' ' + String(s.code || '')).toLowerCase();
   const priced = parseFloat(s.price || '0') > 0;
   return priced || t.includes('ninja') || t.includes('cold chain') ||
@@ -79,10 +94,7 @@ if (!scLine || hasRealDelivery) {
     skip_reason: !scLine ? 'not a self-collect order' : 'delivery order with phantom self-collect line' } }];
 }
 
-// Pickup point from the 6-digit postal in "Self-Collection - <postal>".
-const postal = (String(scLine.title || '').match(/(\d{6})/) || [])[1] || '';
-const CCK_POSTALS = __CCK_POSTALS__;
-const isCCK = CCK_POSTALS.indexOf(postal) !== -1;
+const isCCK = scPoint.point === 'cck';
 
 const orderName = body.name || `#${body.order_number || body.id}`;
 const total = body.total_price || '0.00';
@@ -213,7 +225,7 @@ jobs.push({ chat_id: LAUNCHCYCLE_CHAT,
 return jobs.map(j => ({ json: Object.assign({ is_self_collect: true, order_name: orderName, pickup_point: isCCK ? 'cck' : 'siglap' }, j) }));
 """
 FORMAT_JS = (FORMAT_JS
-    .replace("__CCK_POSTALS__", json.dumps(CCK_POSTALS))
+    .replace("__PICKUP_POINTS__", json.dumps(PICKUP_POINTS))
     .replace("__MAIN_CHAT__", TELEGRAM_CHAT_ID)
     .replace("__MAIN_THREAD__", str(TELEGRAM_WESLEE_THREAD_ID))
     .replace("__CHANDANI_CHAT__", CHANDANI_CHAT_ID)
