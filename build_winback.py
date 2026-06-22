@@ -114,7 +114,19 @@ function normalizePhone(p) {
   if (digits.length >= 10 && digits.length <= 15) return '+' + digits;
   return '';
 }
-""" + COOLDOWN_JS_SNIPPET + BLACKLIST_JS_SNIPPET + r"""
+""" + COOLDOWN_JS_SNIPPET.replace("__SELF_WORKFLOW__", "winback") + BLACKLIST_JS_SNIPPET + r"""
+
+// Rival guard — don't winback someone we nudged via post-trial or reorder in the last 30d.
+// "been a while" is false if we just messaged them; this stops the trial -> winback pile-on
+// that hit +65 9145 4483 (post-trial D21 on Jun 1 -> winback on Jun 22, 21d apart).
+const WINBACK_RIVAL_DAYS = 30;
+const WINBACK_RIVAL_MS = WINBACK_RIVAL_DAYS * 24 * 60 * 60 * 1000;
+const WINBACK_RIVALS = new Set(['post_trial_nurture','reorder_reminder']);
+function isInRivalNudgeWindow(phone) {
+  const arr = MKT_SENDS.get(phone) || [];
+  const now = Date.now();
+  return arr.some(r => WINBACK_RIVALS.has(r.wf) && (now - r.t) < WINBACK_RIVAL_MS);
+}
 
 const sentEmails = new Set();
 for (const r of sentRows) {
@@ -196,8 +208,13 @@ for (const c of customerRows) {
   const phone = normalizePhone(rawPhone);
   if (!phone) { stats.invalid_phone++; continue; }
 
-  if (isInGlobalCooldown(phone)) {
+  if (isOverFrequencyCap(phone)) {
     stats.skipped_global_cooldown++;
+    continue;
+  }
+
+  if (isInRivalNudgeWindow(phone)) {
+    stats.skipped_rival_nudge = (stats.skipped_rival_nudge || 0) + 1;
     continue;
   }
 
@@ -270,7 +287,7 @@ for (const it of $input.all()) {
     continue;
   }
   const firstName = j.first_name || 'pawrent';
-  const msg = `hihi 🐾 yash & nic here from The Bon Pet, been a while! 💛 how's your furkid? we just launched pork for dogs 🍖 + duck for cats 🦆, peek if curious 🐾 https://thebonpet.com`;
+  const msg = `hihi ${firstName} 🐾 yash & nic here from The Bon Pet, been a while! 💛 no agenda, just thinking of you and your furkid, how have they been? if there's anything we can help with, or any feedback for us, we'd genuinely love to hear 🐾`;
 
   const baseFields = {
     email: j.email,

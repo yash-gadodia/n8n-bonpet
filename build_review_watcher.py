@@ -274,12 +274,9 @@ return $input.all().map(it => {
   const ratingPhrase = `(${r.rating} stars! 🥹)`;
   const msg = `${greeting} 🐾
 
-Yash here from The Bon Pet. Just saw your review pop up on Google ${ratingPhrase} and had to say thank you personally. Reviews from happy pet parents mean the world to our small team in SG.
+Yash here from The Bon Pet. just saw your review pop up on Google ${ratingPhrase} and had to say thank you personally 💛 reviews from happy pet parents genuinely mean the world to our small team in SG.
 
-As a small thank-you, here's 10% off your next order:
-🎁 *${r.promo_code}*
-
-Hope your furkid's been loving the food. Any feedback or new ideas, just reply here 😊
+hope your furkid's been loving the food. any feedback or ideas, just reply here, i read every message 😊
 
 ❤️ Yash & the Bon Pet team`;
   return { json: {
