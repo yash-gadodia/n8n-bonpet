@@ -25,8 +25,9 @@ import os
 import urllib.request
 import urllib.error
 
-from _sent_log import (
 import subprocess
+
+from _sent_log import (
     read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
 
@@ -59,7 +60,6 @@ const TARGET_DAYS_SINCE = 7;  // deliver exactly 7 days ago
 const TOLERANCE_DAYS = 0;      // window: [7, 7] (can relax to ±1 if needed)
 
 const TRIAL_CODES = ['FREETRIAL<3THEBONPET', 'CATTRIAL<3THEBONPET', 'DOGTRIAL<3THEBONPET'];
-const PROMO_CODE = 'TRIALGRAD<3THEBONPET';
 
 function normEmail(s) { return String(s || '').trim().toLowerCase(); }
 function normalizePhone(p) {
@@ -77,7 +77,7 @@ function normalizePhone(p) {
 }
 // Alias kept for existing references in this file
 const normPhone = normalizePhone;
-""" + COOLDOWN_JS_SNIPPET + r"""
+""" + COOLDOWN_JS_SNIPPET.replace("__SELF_WORKFLOW__", "trial_graduation") + r"""
 
 function parseDate(s) {
   if (!s) return null;
@@ -149,7 +149,7 @@ for (const [email, data] of lastByEmail) {
   if (!data.phone) { stats.skipped_no_phone++; continue; }
   if (!data.delivery_ts) { stats.skipped_no_delivery_date++; continue; }
   if (data.is_subscriber) { stats.skipped_is_subscriber++; continue; }
-  if (isInGlobalCooldown(data.phone)) { stats.skipped_global_cooldown = (stats.skipped_global_cooldown || 0) + 1; continue; }
+  if (isOverFrequencyCap(data.phone)) { stats.skipped_global_cooldown = (stats.skipped_global_cooldown || 0) + 1; continue; }
 
   // Check if most recent order is a trial
   let trialType = null;
@@ -170,17 +170,17 @@ for (const [email, data] of lastByEmail) {
   stats.ready_to_message++;
 
   // Determine collection link (cats vs dogs)
-  let collectionUrl = 'https://thebonpet.com/collections/cats';
-  if (trialType === 'DOGTRIAL') collectionUrl = 'https://thebonpet.com/collections/dogs';
+  // Auto-apply discount link (code never shown in body) that lands on the right collection.
+  let collectionUrl = 'https://thebonpet.com/discount/TRIALGRAD%253C3THEBONPET?redirect=%2Fcollections%2Fcats';
+  if (trialType === 'DOGTRIAL') collectionUrl = 'https://thebonpet.com/discount/TRIALGRAD%253C3THEBONPET?redirect=%2Fcollections%2Fdogs';
 
   const petNamePhrase = data.pet_name ? `${data.pet_name}` : 'your furkid';
 
   const msg = `Hey ${data.first_name} 🐾 did ${petNamePhrase} enjoy the Bon Pet trial?\n\n` +
-    `If they were a fan, we'd love to keep them eating fresh. Here's 20% off your first subscription ` +
-    `code *${PROMO_CODE}*\n\n` +
-    `Also free delivery over $60 cat / $100 dog + 10% off ongoing. Cancel anytime, no lock-ins.\n\n` +
+    `just checking in to see how it went, would genuinely love your honest thoughts (anything we can do better?) 💛\n\n` +
+    `if you'd like to keep ${petNamePhrase} on fresh food, i've set aside 20% off your first subscription, it'll apply on its own at the link below 🐾 no rush at all, and happy to help you pick the right plan\n\n` +
     `→ ${collectionUrl}\n\n` +
-    `❤️ The Bon Pet team`;
+    `❤️ Yash & the Bon Pet team`;
 
   const dryRunMsg = `🧪 *DRY RUN — would send to ${data.first_name} (${data.phone})*\n` +
     `📊 days_since_delivery=${daysSinceDelivery}  trial_type=${trialType}\n` +

@@ -75,37 +75,25 @@ DAILY_CAP_PER_COHORT = 5
 
 PAUSED_MSG_TEMPLATE = """Hi {first_name}! 🐾
 
-Yash & Nic here, just doing a check-in 🐾
+Yash & Nic here, just doing a little check-in, no agenda 🐾 hope you and your furkid are doing well 💛
 
-A few things have changed since you paused:
+we've been quietly tidying things up behind the scenes (more reliable deliveries, easier to manage your sub), so whenever the time feels right to pick back up, we'd love to have you.
 
-✅ Switching to a dedicated cold-chain fleet for more reliable deliveries
-✅ Free self-collection added if you're near Siglap
-✅ Faster turnaround with our new order system
-✅ Site got a refresh (much easier to subscribe + manage now)
-
-Whenever the time feels right, we've set aside 30% off for you:
-*WELCOMEBACK<3THEBONPET* 🎁
-
-No rush, just wanted to keep you in the loop 💛
+if you ever fancy it, we've set aside 30% off for you, it'll apply on its own here 💛
+https://thebonpet.com/discount/WELCOMEBACK%253C3THEBONPET
+no rush at all, just wanted to keep you in the loop.
 
 ❤️ Yash & Nic"""
 
 CANCELLED_MSG_TEMPLATE = """Hi {first_name}! 🐾
 
-Yash & Nic from The Bon Pet. It's been a while since you cancelled and we wanted to send a proper note, not a sales pitch.
+Yash & Nic from The Bon Pet. it's been a while since you cancelled and we just wanted to send a proper note, not a sales pitch 💛
 
-A handful of things have changed since you last tried us:
+honestly, even a one-liner on what didn't quite work for you would help our tiny SG team more than anything 🙏
 
-✅ Switching to a dedicated cold-chain fleet for more reliable deliveries
-✅ Free self-collection if you're near Siglap
-✅ Faster, more accurate fulfilment via our new order system
-✅ Fully revamped site (way easier to browse + manage)
-
-If any of that makes you curious, here's 30% off whenever you fancy another go:
-*WELCOMEBACK<3THEBONPET* 🎁
-
-Honestly though, even a one-liner on what didn't work for you would help us more than anything 🙏
+and if you ever feel like giving it another go, there's 30% off waiting for you, it applies on its own here (whenever you fancy):
+https://thebonpet.com/discount/WELCOMEBACK%253C3THEBONPET
+no pressure either way.
 
 ❤️ Yash & Nic"""
 
@@ -139,7 +127,7 @@ function normalizePhone(p) {
   return '';
 }
 function normEmail(e) { return String(e || '').toLowerCase().trim(); }
-""" + COOLDOWN_JS_SNIPPET + BLACKLIST_JS_SNIPPET + r"""
+""" + COOLDOWN_JS_SNIPPET.replace("__SELF_WORKFLOW__", "sub_reactivation") + BLACKLIST_JS_SNIPPET + r"""
 
 // --- Load all source nodes ---
 const subRows   = $('Read Subscribers').all().map(it => it.json);
@@ -314,7 +302,7 @@ for (const c of contracts.values()) {
   if (!phone) { stats.skip_no_phone++; continue; }
   if (!/^\+\d{8,15}$/.test(phone)) { stats.skip_invalid_phone++; continue; }
   if (isBlacklisted(phone)) { stats.skip_blacklist++; continue; }
-  if (isInGlobalCooldown(phone)) { stats.skip_global_cooldown++; continue; }
+  if (isOverFrequencyCap(phone)) { stats.skip_global_cooldown++; continue; }
 
   const candidate = {
     contract_id:        c.contract_id,
