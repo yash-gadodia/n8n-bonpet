@@ -18,8 +18,9 @@ import glob
 import urllib.request
 import urllib.error
 
-from _sent_log import (
 import subprocess
+
+from _sent_log import (
     read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
 
@@ -81,7 +82,7 @@ function normalizePhone(p) {
 }
 // Alias kept for existing references in this file
 const normPhone = normalizePhone;
-""" + COOLDOWN_JS_SNIPPET + r"""
+""" + COOLDOWN_JS_SNIPPET.replace("__SELF_WORKFLOW__", "dog_run_invite") + r"""
 
 function parseDate(s) {
   if (!s) return 0;
@@ -155,7 +156,7 @@ for (const c of customerRows) {
   const phone = normPhone(rawPhone);
   if (!phone) { stats.invalid_phone++; continue; }
   if (PRIOR_SENT.has(phone)) { stats.excluded_prior_sent++; continue; }
-  if (isInGlobalCooldown(phone)) { stats.skipped_global_cooldown = (stats.skipped_global_cooldown || 0) + 1; continue; }
+  if (isOverFrequencyCap(phone)) { stats.skipped_global_cooldown = (stats.skipped_global_cooldown || 0) + 1; continue; }
 
   const firstName = String(j.first_name || '').trim() ||
                     String(j.last_name || '').trim();

@@ -147,15 +147,45 @@ def append_global_sent_log_node(position, name="Log Global Sent"):
 
 # JS snippet to inject into a workflow's Code node AFTER normalizePhone() is defined.
 # Reads $('Read Global Sent Log').all() (upstream node must have that exact name),
-# builds a Map<phone, latest-sent-ms>, and exposes isInGlobalCooldown(phone).
-# Default 7 days = 604800000 ms.
+# and exposes TWO guards:
+#
+#   isInGlobalCooldown(phone)  - short courtesy guard: true if ANY outbound (marketing
+#                                OR transactional) went to this phone in the last 7 days.
+#                                Used by TRANSACTIONAL senders (abandoned cart, review
+#                                watcher, subscription save) - they should still fire on a
+#                                customer-triggered event, just not double-text within 7d.
+#
+#   isOverFrequencyCap(phone)  - hard per-customer MARKETING cap (the anti-spam fix).
+#                                true if EITHER:
+#                                  (a) a DIFFERENT marketing campaign messaged this phone in
+#                                      the last FREQ_RECENT_DAYS (14) days, OR
+#                                  (b) >= FREQ_MAX_IN_WINDOW (3) marketing messages were sent
+#                                      in the last FREQ_WINDOW_DAYS (90) days.
+#                                Counts MARKETING_WORKFLOWS rows only. Same-workflow sends are
+#                                exempt from (a) so a campaign's own designed multi-touch
+#                                cadence (post-trial D7/D14/D21, reorder #1/#2) is preserved -
+#                                set SELF_WORKFLOW to the builder's own workflow string.
+#                                Used by every MARKETING sender. This is the backstop that
+#                                makes runaway daily re-spam impossible even if a per-workflow
+#                                dedup tab breaks: at most 3 marketing touches per 90 days.
+#
+# Marketing builders inject this and call isOverFrequencyCap(phone); set the SELF_WORKFLOW
+# token via .replace("__SELF_WORKFLOW__", "winback") so own-cadence steps aren't blocked.
 COOLDOWN_JS_SNIPPET = r"""
-// --- Global WA cooldown (spam prevention across workflows) ---
+// --- Global WA frequency cap (spam prevention across workflows) ---
 // Prefers "Filter Recent Sent Log" if present (bounded memory); falls back to
 // "Read Global Sent Log" so workflows without the filter still work.
+const SELF_WORKFLOW = "__SELF_WORKFLOW__";  // marketing builders .replace() this; others leave as-is (harmless)
+const MARKETING_WORKFLOWS = new Set(['post_trial_nurture','winback','reorder_reminder','trial_graduation','dog_run_invite','sub_reactivation']);
 const GLOBAL_COOLDOWN_DAYS = 7;
 const GLOBAL_COOLDOWN_MS = GLOBAL_COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
-const GLOBAL_LAST_SENT = new Map();
+const FREQ_RECENT_DAYS = 14;            // no two DIFFERENT marketing campaigns within this gap
+const FREQ_RECENT_MS = FREQ_RECENT_DAYS * 24 * 60 * 60 * 1000;
+const FREQ_WINDOW_DAYS = 90;            // rolling window for the hard count cap
+const FREQ_WINDOW_MS = FREQ_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+const FREQ_MAX_IN_WINDOW = 3;           // max marketing messages per customer per 90 days
+const GLOBAL_LAST_SENT = new Map();     // phone -> latest send ms (ANY workflow)
+const MKT_SENDS = new Map();            // phone -> [{t, wf}] for MARKETING rows only
 let _sentRows = [];
 try { _sentRows = $('Filter Recent Sent Log').all(); }
 catch (e) {
@@ -170,10 +200,22 @@ for (const it of _sentRows) {
   if (!t) continue;
   const prev = GLOBAL_LAST_SENT.get(p) || 0;
   if (t > prev) GLOBAL_LAST_SENT.set(p, t);
+  const wf = String(s.workflow || '').trim();
+  if (MARKETING_WORKFLOWS.has(wf)) {
+    if (!MKT_SENDS.has(p)) MKT_SENDS.set(p, []);
+    MKT_SENDS.get(p).push({ t, wf });
+  }
 }
 function isInGlobalCooldown(phone) {
   const last = GLOBAL_LAST_SENT.get(phone);
   if (!last) return false;
   return (Date.now() - last) < GLOBAL_COOLDOWN_MS;
+}
+function isOverFrequencyCap(phone) {
+  const arr = MKT_SENDS.get(phone) || [];
+  const now = Date.now();
+  const recentOther = arr.some(r => (now - r.t) < FREQ_RECENT_MS && r.wf !== SELF_WORKFLOW);
+  const inWindow = arr.filter(r => (now - r.t) < FREQ_WINDOW_MS).length;
+  return recentOther || inWindow >= FREQ_MAX_IN_WINDOW;
 }
 """

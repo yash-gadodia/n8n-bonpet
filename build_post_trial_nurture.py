@@ -86,7 +86,7 @@ function normalizePhone(p) {
   if (digits.length >= 8 && digits.length <= 15) return '+' + digits;
   return '';
 }
-""" + COOLDOWN_JS_SNIPPET + BLACKLIST_JS_SNIPPET + r"""
+""" + COOLDOWN_JS_SNIPPET.replace("__SELF_WORKFLOW__", "post_trial_nurture") + BLACKLIST_JS_SNIPPET + r"""
 
 // Rival-workflow guard — don't trial-nurture if reorder_reminder sent recently.
 // Janani case (2026-05-20): she got reorder May 1 + D21 May 11 = 2 reorder-flavoured nudges in 10d.
@@ -238,7 +238,7 @@ for (const [key, custOrders] of ordersByKey) {
   }
 
   // Exclusion: global 7-day cooldown (customer messaged by ANY workflow recently)
-  if (isInGlobalCooldown(phone)) {
+  if (isOverFrequencyCap(phone)) {
     stats.skipped_global_cooldown = (stats.skipped_global_cooldown || 0) + 1;
     continue;
   }

@@ -130,27 +130,21 @@ const greeting = firstName ? `Hi ${firstName}!` : 'Hi!';
 
 const pauseMsg = `${greeting} 🐾
 
-Yash here. Saw you paused your sub, hope all's good with your furkid 🐾
+Yash here. saw you paused your sub, hope all's good with your furkid 🐾 totally no rush, take your time 💛
 
-Take your time. When you're ready, a few things that might help:
-
-✅ Swap to a different protein (new: Pork for dogs 🍖, Duck for cats 🦆)
-✅ Stretch your cadence to 6 weeks
-✅ Come back with 20% off: *WELCOMEBACK<3THEBONPET* 🎁
-
-Anything on your mind? Just reply, I read every message 💛
+if anything's on your mind, just reply, i read every message myself. and whenever you're ready to pick back up, happy to help (swap proteins, stretch the cadence, whatever works for you).
 
 ❤️ Yash & the Bon Pet team`;
 
 const cancelMsg = `${greeting} 🐾
 
-Yash from The Bon Pet. Saw you cancelled your sub, sorry to see you go 🥺
+Yash from The Bon Pet. saw you cancelled your sub, sorry to see you go 🥺
 
-Mind sharing what changed? We're a tiny SG team and feedback like yours actually shapes what we do next.
+mind sharing what changed? we're a tiny SG team and feedback like yours genuinely shapes what we do next 🙏
 
-If you ever want to give it another shot, here's 20% off for you: *WELCOMEBACK<3THEBONPET* 🎁
-
-Either way, thanks so much for trying us 🙏
+and if you ever want to give it another shot, there's 20% off waiting for you, it applies on its own here (whenever you fancy):
+https://thebonpet.com/discount/WELCOMEBACK%253C3THEBONPET
+either way, thank you so much for trying us 💛
 
 ❤️ Yash & the Bon Pet team`;
 

@@ -69,7 +69,7 @@ for (const it of $('Read Sent Log').all()) {
   const p = normalizePhone(it.json.phone);
   if (p) ALREADY_SENT_PHONES.add(p);
 }
-""" + COOLDOWN_JS_SNIPPET + BLACKLIST_JS_SNIPPET + r"""
+""" + COOLDOWN_JS_SNIPPET.replace("__SELF_WORKFLOW__", "reorder_reminder") + BLACKLIST_JS_SNIPPET + r"""
 
 // Rival-workflow guard — don't reorder-nudge if post_trial_nurture sent recently.
 // Janani case (2026-05-20): she got reorder May 1 + post_trial D21 May 11 = 2 reorder-flavoured nudges in 10d.
@@ -172,7 +172,7 @@ for (const [key, custOrders] of sortedEntries) {
   const phone = normalizePhone(last.phone);
   if (!phone) { stats.skipped_no_phone++; continue; }
   if (ALREADY_SENT_PHONES.has(phone)) { stats.skipped_already_sent = (stats.skipped_already_sent || 0) + 1; continue; }
-  if (isInGlobalCooldown(phone)) { stats.skipped_global_cooldown = (stats.skipped_global_cooldown || 0) + 1; continue; }
+  if (isOverFrequencyCap(phone)) { stats.skipped_global_cooldown = (stats.skipped_global_cooldown || 0) + 1; continue; }
   if (isInRivalNudgeWindow(phone)) { stats.skipped_rival_nudge = (stats.skipped_rival_nudge || 0) + 1; continue; }
   if (isBlacklisted(phone)) { stats.skipped_blacklist = (stats.skipped_blacklist || 0) + 1; continue; }
 
