@@ -152,9 +152,16 @@ const o = ctx.order;
 const SHOP = '__SHOP__';
 const API = '__API_VERSION__';
 const TOKEN = '__SHOPIFY_TOKEN__';
-const CCK_POSTALS = ['681810'];
+// Resolve the pickup point from the order's shipping-line title. Native local-pickup orders
+// carry the Shopify LOCATION name (e.g. "Residential Point @ Stevens"); legacy orders carry
+// "Self-Collection - <postal>". Match all aliases per point. Keep in sync with build_selfcollect_alert.py.
+const POINTS = [
+  { point: 'siglap',  match: ['residential point @ siglap', 'self-collection - 448908', 'yash'] },
+  { point: 'cck',     match: ['residential point @ cck', 'self-collection - 681810', 'residential point 1'] },
+  { point: 'stevens', match: ['residential point @ stevens', 'self-collection - 259330'] },
+];
 
-let postal = '';
+let point = 'siglap';
 try {
   const resp = await this.helpers.httpRequest({
     method: 'POST',
@@ -165,11 +172,13 @@ try {
   });
   const node = resp && resp.data && resp.data.orders && resp.data.orders.nodes && resp.data.orders.nodes[0];
   const sl = (node && node.shippingLines && node.shippingLines.nodes) || [];
-  const scTitle = sl.map(x => String((x && x.title) || '')).find(t => /self.?collect/i.test(t)) || '';
-  postal = (scTitle.match(/(\d{6})/) || [])[1] || '';
-} catch (e) { postal = ''; }
+  const hay = sl.map(x => (String((x && x.title) || '') + ' ' + String((x && x.code) || ''))).join(' ').toLowerCase();
+  const hit = POINTS.find(p => p.match.some(m => hay.includes(m)));
+  if (hit) point = hit.point;
+} catch (e) { point = 'siglap'; }
 
-const isCCK = CCK_POSTALS.indexOf(postal) !== -1;
+const isCCK = point === 'cck';
+const isStevens = point === 'stevens';
 
 let lines;
 let signoff;
@@ -211,6 +220,30 @@ if (isCCK) {
     `Love,`,
     `The Bon Pet Team 🐾`,
   ];
+} else if (isStevens) {
+  lines = [
+    `Hi ${o.first_name}! 🐾`,
+    '',
+    `Your order ${o.order_name} is packed and ready for self-collection 🎉`,
+    '',
+    `📍 *Pickup Location (Stevens)*`,
+    `27 Ewe Boon Road, #03-02`,
+    `Singapore 259330`,
+    '',
+    `🏠 Head to the *3rd floor, Staircase A* and look for The Bon Pet's green logo 💚`,
+    `❄️ Your order is in the *light green bag* inside the *chest freezer*`,
+    '',
+    `A few quick notes:`,
+    `🙏 *Please collect within 3 days of this message.* Our freezer at the pickup point is small, so we really need every pack out fast to make room for the next batch`,
+    `💬 If 3 days doesn't work for you, just reply and let us know, we'll figure something out together`,
+    `✅ The freezer is accessible 24/7, pop by anytime`,
+    `✅ The pack itself is a cooler bag, just get it into your home freezer within 2-3 hours of pickup`,
+    `✅ Once frozen, good for up to 1 year`,
+  ];
+  signoff = [
+    `Any questions, just reply here. Thanks so much for choosing us 💛`,
+    `❤️ The Bon Pet team`,
+  ];
 } else {
   lines = [
     `Hi ${o.first_name}! 🐾`,
@@ -246,7 +279,7 @@ return [{
     ...ctx,
     target_phone: o.phone,
     message: lines.join('\n'),
-    pickup_point: isCCK ? 'cck' : 'siglap',
+    pickup_point: point,
   }
 }];
 """.replace("__SHOP__", SHOPIFY_SHOP).replace("__API_VERSION__", SHOPIFY_API_VERSION).replace("__SHOPIFY_TOKEN__", SHOPIFY_TOKEN)
