@@ -29,15 +29,17 @@ TELEGRAM_WESLEE_THREAD_ID = 34253            # weslee thread (was "2" / ops thre
 TELEGRAM_TOKEN = open(os.path.expanduser("~/.telegram-weslee-bot-token")).read().strip()
 
 # ── Pickup points ──────────────────────────────────────────────────────────
-# Detection now matches the shipping-line title/code against each point's known names.
+# Detection matches the shipping-line title/code against each point's known names.
 # A pickup order's title is the Shopify pickup LOCATION name (native local pickup) OR the
-# legacy "Self-Collection - <postal>" custom-rate title. Keep both per point.
-#   Siglap (Yash)            → location "Yash"               (was "Self-Collection - 448908")
-#   Choa Chu Kang (Chandani) → location "Residential Point 1" (was "Self-Collection - 681810")
-# Source: Shopify > Settings > Locations, current as of 2026-06-16. Update on rename.
+# legacy "Self-Collection - <postal>" custom-rate title. Keep all aliases per point.
+#   Siglap (Yash)            → location "Residential Point @ Siglap"  (older: "Yash" / "Self-Collection - 448908")
+#   Choa Chu Kang (Chandani) → location "Residential Point @ CCK"     (older: "Residential Point 1" / "Self-Collection - 681810")
+#   Stevens (KC / Ewe Boon)  → location "Residential Point @ Stevens" (legacy: "Self-Collection - 259330")
+# Source: Shopify > Settings > Locations, current as of 2026-06-24. Update on rename.
 PICKUP_POINTS = [
-    {"match": ["yash", "self-collection - 448908"], "point": "siglap", "postal": "448908"},
-    {"match": ["residential point 1", "self-collection - 681810"], "point": "cck", "postal": "681810"},
+    {"match": ["residential point @ siglap", "self-collection - 448908", "yash"], "point": "siglap", "postal": "448908"},
+    {"match": ["residential point @ cck", "self-collection - 681810", "residential point 1"], "point": "cck", "postal": "681810"},
+    {"match": ["residential point @ stevens", "self-collection - 259330"], "point": "stevens", "postal": "259330"},
 ]
 
 # Siglap (Yash)
@@ -48,6 +50,11 @@ YASH_DM_ID = 166637821                        # Yash's private chat with @weslee
 CHANDANI_CHAT_ID = "-1004221528278"          # "Chandani X The Bon Pet" supergroup (migrated from -5033434144)
 CHANDANI_USERNAME = "chandkiraat"            # @-tag in her group
 CHANDANI_DM_ID = 579742150                   # Chandani's private chat with @weslee_bot
+
+# Stevens (KC / Ewe Boon)
+KC_CHAT_ID = "-5544333294"                   # "KC X The Bon Pet Pickup Point" group
+KC_USERNAME = "kaseyketo"                    # @-tag in the group (Kasey)
+KC_DM_ID = 8936228589                        # Kc Ong's private chat with @weslee_bot
 
 # Launch Cycle (external advisory agency) - visibility copy of every self-collect order
 LAUNCHCYCLE_CHAT_ID = "-5177312185"          # "Launch Cycle X The Bon Pet" group
@@ -71,7 +78,7 @@ const PICKUP_POINTS = __PICKUP_POINTS__;
 const pickupFor = s => {
   const hay = (String(s.title || '') + ' ' + String(s.code || '')).toLowerCase();
   for (const p of PICKUP_POINTS) { if (p.match.some(m => hay.includes(m))) return p; }
-  if (/self.?collect/.test(hay)) return { point: 'siglap', postal: '448908' };  // legacy, unknown point
+  if (/self.?collect|residential point|pick.?up/.test(hay)) return { point: 'siglap', postal: '448908' };  // unknown pickup → default Siglap
   return null;
 };
 const scLine = shippingLines.find(pickupFor);
@@ -94,7 +101,7 @@ if (!scLine || hasRealDelivery) {
     skip_reason: !scLine ? 'not a self-collect order' : 'delivery order with phantom self-collect line' } }];
 }
 
-const isCCK = scPoint.point === 'cck';
+const point = scPoint.point; // 'siglap' | 'cck' | 'stevens'
 
 const orderName = body.name || `#${body.order_number || body.id}`;
 const total = body.total_price || '0.00';
@@ -188,12 +195,15 @@ const MAIN_THREAD = __MAIN_THREAD__;
 const CHANDANI_CHAT = '__CHANDANI_CHAT__';
 const CHANDANI_USERNAME = '__CHANDANI_USERNAME__';
 const CHANDANI_DM = __CHANDANI_DM__;
+const KC_CHAT = '__KC_CHAT__';
+const KC_USERNAME = '__KC_USERNAME__';
+const KC_DM = __KC_DM__;
 const YASH_USERNAME = '__YASH_USERNAME__';
 const YASH_DM = __YASH_DM__;
 const LAUNCHCYCLE_CHAT = '__LC_CHAT__';
 
 const jobs = [];
-if (isCCK) {
+if (point === 'cck') {
   const tag = CHANDANI_USERNAME ? `@${CHANDANI_USERNAME}` : 'Chandani';
   // 1) Chandani's group, actionable + tagged
   jobs.push({ chat_id: CHANDANI_CHAT,
@@ -206,8 +216,21 @@ if (isCCK) {
     jobs.push({ chat_id: CHANDANI_DM,
       text: `📦 *New CCK self-collect order to pack* ${orderName}\n\n${summary}` });
   }
+} else if (point === 'stevens') {
+  const tag = KC_USERNAME ? `@${KC_USERNAME}` : 'team';
+  // 1) KC's group, actionable + tagged
+  jobs.push({ chat_id: KC_CHAT,
+    text: `🏪 *Self-collect order · Stevens* ${orderName}\n\n${summary}\n\n${tag} heads up, please queue this for pickup at the Stevens point. 📦` });
+  // 2) main team thread, visibility only (no tag)
+  jobs.push({ chat_id: MAIN_CHAT, message_thread_id: MAIN_THREAD,
+    text: `🏪 *Self-collect order · Stevens (KC's point)* ${orderName}\n\n${summary}` });
+  // 3) DM Kc to pack (only once they have registered with the bot)
+  if (KC_DM) {
+    jobs.push({ chat_id: KC_DM,
+      text: `📦 *New Stevens self-collect order to pack* ${orderName}\n\n${summary}` });
+  }
 } else {
-  // Siglap (448908 / legacy bare "Self-Collection")
+  // Siglap (448908 / legacy bare "Self-Collection") - also the default for any unknown pickup
   // 1) main team thread, actionable + tag Yash
   jobs.push({ chat_id: MAIN_CHAT, message_thread_id: MAIN_THREAD,
     text: `🏪 *Self-collect order · Siglap* ${orderName}\n\n${summary}\n\n@${YASH_USERNAME} heads up, queue for pickup at the Siglap freezer. 📦` });
@@ -219,10 +242,11 @@ if (isCCK) {
 }
 
 // Launch Cycle (external agency) - visibility copy for every self-collect order
+const lcLabel = point === 'cck' ? 'CCK' : point === 'stevens' ? 'Stevens' : 'Siglap';
 jobs.push({ chat_id: LAUNCHCYCLE_CHAT,
-  text: `🏪 *Self-collect order · ${isCCK ? 'CCK' : 'Siglap'}* ${orderName}\n\n${summary}` });
+  text: `🏪 *Self-collect order · ${lcLabel}* ${orderName}\n\n${summary}` });
 
-return jobs.map(j => ({ json: Object.assign({ is_self_collect: true, order_name: orderName, pickup_point: isCCK ? 'cck' : 'siglap' }, j) }));
+return jobs.map(j => ({ json: Object.assign({ is_self_collect: true, order_name: orderName, pickup_point: point }, j) }));
 """
 FORMAT_JS = (FORMAT_JS
     .replace("__PICKUP_POINTS__", json.dumps(PICKUP_POINTS))
@@ -231,6 +255,9 @@ FORMAT_JS = (FORMAT_JS
     .replace("__CHANDANI_CHAT__", CHANDANI_CHAT_ID)
     .replace("__CHANDANI_USERNAME__", CHANDANI_USERNAME)
     .replace("__CHANDANI_DM__", str(CHANDANI_DM_ID) if CHANDANI_DM_ID else "null")
+    .replace("__KC_CHAT__", KC_CHAT_ID)
+    .replace("__KC_USERNAME__", KC_USERNAME)
+    .replace("__KC_DM__", str(KC_DM_ID) if KC_DM_ID else "null")
     .replace("__YASH_USERNAME__", YASH_USERNAME)
     .replace("__YASH_DM__", str(YASH_DM_ID) if YASH_DM_ID else "null")
     .replace("__LC_CHAT__", LAUNCHCYCLE_CHAT_ID))
