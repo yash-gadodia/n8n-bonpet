@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refund & Cancel Alert — two Shopify webhooks (refunds/create + orders/cancelled) feeding
+"""Refund & Cancel Alert - two Shopify webhooks (refunds/create + orders/cancelled) feeding
 into one shared team-broadcast workflow. Customer info enriched from the Customers tab.
 """
 import json
@@ -51,7 +51,7 @@ return [{ json: { event_type: 'cancel', payload: body } }];
 """
 
 FORMAT_JS = r"""// Format team alert for refund or cancel, enriched with customer info from Customers tab
-// Only one of the two Tag nodes fired in this execution — find which.
+// Only one of the two Tag nodes fired in this execution - find which.
 function tryRead(nodeName) {
   try { return $(nodeName).all(); } catch (e) { return []; }
 }
@@ -61,7 +61,7 @@ const tagged = (refundTag.length > 0 ? refundTag[0].json
              :  cancelTag.length > 0 ? cancelTag[0].json
              :  null);
 if (!tagged) {
-  return [{ json: { message: '(no tagged payload found — alert skipped)', event_type: 'unknown' } }];
+  return [{ json: { message: '(no tagged payload found - alert skipped)', event_type: 'unknown' } }];
 }
 const eventType = tagged.event_type;
 const p = tagged.payload;
@@ -119,7 +119,7 @@ if (eventType === 'refund') {
 
 const adminUrl = orderId ? `https://admin.shopify.com/store/__STORE__/orders/${orderId}` : '';
 
-// Enrich with customer (may not have customer_id for refunds — skip enrichment then)
+// Enrich with customer (may not have customer_id for refunds - skip enrichment then)
 let customerFullName = '', lifetimeOrders = 0, lifetimeSpent = 0;
 if (customerId) {
   const c = customers.find(r => String(r.json.customer_id || '') === customerId);
