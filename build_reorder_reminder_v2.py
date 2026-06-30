@@ -228,11 +228,11 @@ for (const [key, custOrders] of sortedEntries) {
   let msg1 = '', msg2 = '', msg3 = '';
   if (reminderNum === 1) {
     msg1 = `hihi 🐾`;
-    msg2 = `yash & nic here from bon pet 🙂 saw your last order was ${daysSince} days back, your furkid prob running low soon 🥣`;
+    msg2 = `yash & nic here from The Bon Pet 🙂 saw your last order was ${daysSince} days back, your furkid prob running low soon 🥣`;
     msg3 = `easy reorder if useful 🛒 ${cartLink} - or just lmk if you need a hand 💛`;
   } else {
     msg1 = `hihi 🐾`;
-    msg2 = `yash & nic here from bon pet 👋 been ${daysSince} days since your last order, wanted to check ur furkid isn't running low`;
+    msg2 = `yash & nic here from The Bon Pet 👋 been ${daysSince} days since your last order, wanted to check ur furkid isn't running low`;
     msg3 = `easy reorder when ready 🛒 ${cartLink} - any qs just reply 💛`;
   }
 
