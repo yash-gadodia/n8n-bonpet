@@ -105,9 +105,7 @@ const lifetimeSpent  = c ? Number(c.json.total_spent || 0) : 0;
 const tagsStr = String(o.tags || '').toLowerCase();
 const srcStr  = String(o.source_name || '').toLowerCase();
 const discCodes = (o.discount_codes || []).map(d => String(d.code || '').toLowerCase());
-const isSubscriptionOrder = tagsStr.includes('subscription') ||
-                             srcStr.includes('subscription') ||
-                             discCodes.some(c => c.startsWith('subscription'));
+const isSubscriptionOrder = discCodes.some(c => String(c).toLowerCase().startsWith('subscription'));
 
 // ---- Team alert ----
 const items = (o.line_items || []).map(li => {
