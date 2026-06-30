@@ -2,8 +2,8 @@
 """Sub Reactivation — daily WA outreach to paused/cancelled subscribers in the backlog.
 
 Cohorts (per customer, one-shot via dedup sheet):
-  A) PAUSED 21-90 days, never reactivation-messaged → light check-in + 30% off
-  B) CANCELLED 30-180 days, never reactivation-messaged → founder note + 30% off
+  A) PAUSED 21-90 days, never reactivation-messaged → light check-in + 20% off
+  B) CANCELLED 30-180 days, never reactivation-messaged → founder note + 20% off
 
 Hard guardrails (post 2026-05-03 broadcast spam + 2026-05-12 winback dup incidents):
   - DRY_RUN default True. First run: Telegram Yash the counts + sample. No customer sends.
@@ -84,7 +84,7 @@ A few things have changed since you paused:
 ✅ Faster turnaround with our new order system
 ✅ Site got a refresh (much easier to subscribe + manage now)
 
-Whenever the time feels right, we've set aside 30% off for you:
+Whenever the time feels right, we've set aside 20% off for you:
 *WELCOMEBACK<3THEBONPET* 🎁
 
 No rush, just wanted to keep you in the loop 💛
@@ -102,7 +102,7 @@ A handful of things have changed since you last tried us:
 ✅ Faster, more accurate fulfilment via our new order system
 ✅ Fully revamped site (way easier to browse + manage)
 
-If any of that makes you curious, here's 30% off whenever you fancy another go:
+If any of that makes you curious, here's 20% off whenever you fancy another go:
 *WELCOMEBACK<3THEBONPET* 🎁
 
 Honestly though, even a one-liner on what didn't work for you would help us more than anything 🙏

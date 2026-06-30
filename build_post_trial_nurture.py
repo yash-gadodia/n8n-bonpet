@@ -264,15 +264,15 @@ for (const [key, custOrders] of ordersByKey) {
   let msg1 = '', msg2 = '', msg3 = '';
   if (stepNum === 1) {
     msg1 = `hihi 🐾`;
-    msg2 = `yash & nic here from bon pet, we're the founders 🙂`;
+    msg2 = `yash & nic here from The Bon Pet, we're the founders 🙂`;
     msg3 = `saw your trial pack went out about a week ago, just wanted to check in - how's your furkid doing? 🐾 would love to hear back from u, any feedback for us? anything we can improve?`;
   } else if (stepNum === 2) {
     msg1 = `hihi 🐾`;
-    msg2 = `yash & nic here from bon pet 🙂`;
+    msg2 = `yash & nic here from The Bon Pet 🙂`;
     msg3 = `been ~2 weeks since your trial pack - how's your furkid taking to it? if you're thinking about a regular pack lmk, happy to recommend something based on weight + activity 🐾`;
   } else if (stepNum === 3) {
     msg1 = `hihi 🐾`;
-    msg2 = `yash & nic here from bon pet 🙂`;
+    msg2 = `yash & nic here from The Bon Pet 🙂`;
     msg3 = `last nudge from us - if your furkid liked the trial and you'd like to keep them on fresh food, just say the word and i'll sort you out. if not, no worries at all, we won't keep buzzing 💛`;
   }
 
