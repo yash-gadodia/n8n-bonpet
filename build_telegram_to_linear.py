@@ -216,18 +216,19 @@ Classify the message and respond with ONLY valid JSON.
 Schema:
 {
   "action": "create" | "clarify" | "summary" | "update" | "help" | "packlist" | "send_pickup_wa",
-  // For "create" — title, assignee, AND priority must all be clearly present in the user's message.
+  // For "create" — title AND assignee must be clearly present in the user's message.
+  // Priority is OPTIONAL — if the user did NOT signal urgency, default priority to 1 (urgent). NEVER clarify on missing priority.
   // Description is OPTIONAL — if the user didn't write one, set description: null (the title is used as the description).
-  // If ANY of {title, assignee, priority} is missing, return action: "clarify" with a "missing" array instead.
+  // If title OR assignee is missing, return action: "clarify" with a "missing" array instead.
   "title": "<= 70 chars, action-oriented, no trailing period",
   "description": "1-2 sentences if the user wrote one; null otherwise",
   "category": "Dev" | "Marketing" | "Ops" | "BD" | "Customer Support" | "OMS" | "Whatsapp" | "Other",
   "priority": 0|1|2|3|4,
   "assignee": "rachel" | "shaun" | "nicolas" | "yash" | "danielle" | null,
-  // For "clarify" — return when the user wanted to create a ticket but one or more REQUIRED fields is missing.
-  // Required fields are: title, assignee, priority. Description is NOT required.
+  // For "clarify" — return when the user wanted to create a ticket but a REQUIRED field is missing.
+  // Required fields are: title, assignee. Priority and description are NOT required.
   // Include whatever fields WERE clear (or null if not). List the missing field names in "missing".
-  "missing": ["title" | "assignee" | "priority", ...],
+  "missing": ["title" | "assignee", ...],
   // For "summary" — optional filter:
   "filter": { "category": "...", "stale": true, "assignee": "first name or email", "unassigned": true },
   // For "packlist" - optional filters:
@@ -299,24 +300,24 @@ Routing:
 - "help" when user is asking what the bot can do, or the message is empty/unclear/just hi
 - IMPORTANT — "clarify" / "create" are ONLY for filing new Linear tickets. If the user is talking about a real Shopify/OMS order ("order #N", "order N", "mark N packed", "fulfil N", "ship N"), route to "packlist" or "send_pickup_wa", NEVER to "clarify" or "create".
 
-- "create" — file a new Linear ticket. REQUIRES all three of these to be clearly present in the user's message:
+- "create" — file a new Linear ticket. REQUIRES these two to be clearly present in the user's message:
    1. title — derivable from the message (≤70 chars, action-oriented)
    2. assignee — user explicitly names one of rachel | shaun | nicolas | yash | danielle (or says "me"/"mine" → resolves to sender's Linear handle if known)
-   3. priority — user explicitly signals urgency (see Priority cues below). NO silent default.
+   Priority is OPTIONAL — if the user explicitly signals urgency (see Priority cues), use it; otherwise DEFAULT priority to 1 (urgent). NEVER route to clarify just because priority is missing.
    Description is OPTIONAL — if the user wrote extra context, capture it; otherwise set description: null.
-   If ANY of {title, assignee, priority} is missing, use "clarify" — do NOT default, do NOT create.
-   Examples (all three required present → create):
+   If title OR assignee is missing, use "clarify" — do NOT create.
+   Examples (title + assignee present → create):
      - "urgent tix for nicolas to order packaging tomorrow, we're running low on the 300g pouches"  → create, assignee: "nicolas", priority: 1, description: "we're running low on the 300g pouches"
      - "rachel pls draft IG caption for sous vide launch this week, important"                       → create, assignee: "rachel", priority: 2, description: null
      - "assign yash to fix the abandoned cart job, normal priority"                                   → create, assignee: "yash", priority: 3, description: null
-     - "make tix assign nicolas urgent - self collection orders not showing on OMS"                   → create, assignee: "nicolas", priority: 1, description: null  (title alone is enough; no separate description needed)
+     - "make tix assign nicolas - self collection orders not showing on OMS"                          → create, assignee: "nicolas", priority: 1, description: null  (no urgency stated → default priority 1)
+     - "create ticket to fix email api key for n8n, assign nic"                                       → create, assignee: "nicolas", priority: 1, description: null  (no urgency stated → default priority 1)
 
-- "clarify" — user wanted to file a ticket but one or more REQUIRED fields is missing. Required = title, assignee, priority. Description is NOT in the missing list. Return whatever fields ARE clear (or null). Examples:
-     - "make a tix to fix homepage"                                → clarify, missing: ["assignee","priority"]
-     - "assign yash to update IG bio"                              → clarify, missing: ["priority"]
+- "clarify" — user wanted to file a ticket but a REQUIRED field is missing. Required = title, assignee. Priority is NEVER in the missing list. Return whatever fields ARE clear (or null). Examples:
+     - "make a tix to fix homepage"                                → clarify, missing: ["assignee"]
+     - "assign yash to update IG bio"                              → create, assignee: "yash", priority: 1  (title + assignee present, no urgency → default 1)
      - "urgent: fix homepage"                                      → clarify, missing: ["assignee"]
-     - "make tix assign nicolas - self collection orders not showing on OMS"  → clarify, missing: ["priority"]
-     - "make a tix"                                                → clarify, missing: ["title","assignee","priority"]
+     - "make a tix"                                                → clarify, missing: ["title","assignee"]
 
 Categories for "create" / "update":
 - Dev: code, n8n workflows, website, automation, bugs, scripts
@@ -328,24 +329,24 @@ Categories for "create" / "update":
 - Whatsapp: WA broadcasts, templates, customer messaging
 - Other: anything else
 
-Priority cues (user must explicitly signal one for a create — otherwise → clarify):
+Priority cues (OPTIONAL — if the user signals one, use it; otherwise default to 1):
 - "urgent"/"asap"/"now"/"emergency"/"blocker"   → 1
 - "important"/"high"/"high priority"             → 2
 - "normal"/"medium"/"regular"                    → 3
 - "low"/"someday"/"whenever"/"nice to have"      → 4
-- (none of the above said) → priority is MISSING — return clarify.
+- (none of the above said) → DEFAULT to 1 (urgent). Still route to "create", NOT clarify.
 
 For "summary": parse "dev"/"marketing"/etc → filter.category. "stale"/"old" → filter.stale=true. Names like "rachel"/"shaun"/"nicolas"/"yash"/"danielle" → filter.assignee. Phrases like "unassigned", "no owner", "no one", "nobody", "orphan", "without an owner", "not assigned" → filter.unassigned=true (and DO NOT set filter.assignee in this case).
 
 Self-reference: if the message uses "my", "mine", "me", or "i" (e.g. "what's mine?", "my open tix", "what am i working on", "assign to me"), resolve to the sender's Linear handle shown in "Sender Linear handle:" below. If no Linear handle is shown for the sender, omit filter.assignee for summaries and omit assignee for creates.
 
-Continuation handling: if a "Prior bot ask" block is shown below, the user is replying to a previous "🤔 Need a bit more" clarify prompt. Parse the ✅ lines in the prior ask to recover already-known fields (Title, Assignee, Priority/Urgency), then treat the new Message as filling in whatever was previously marked ❓. Merge them and re-emit. If all three required fields (title, assignee, priority) are now present, return action: "create". If still incomplete, return action: "clarify" with the remaining missing fields. Examples:
-  Prior ask had:  ✅ Title: fix homepage, ✅ Assignee: nicolas, ❓ Urgency
+Continuation handling: if a "Prior bot ask" block is shown below, the user is replying to a previous "🤔 Need a bit more" clarify prompt. Parse the ✅ lines in the prior ask to recover already-known fields (Title, Assignee), then treat the new Message as filling in whatever was previously marked ❓. Merge them and re-emit. If both required fields (title, assignee) are now present, return action: "create" (default priority to 1 if no urgency was ever stated). If still incomplete, return action: "clarify" with the remaining missing fields. Examples:
+  Prior ask had:  ✅ Title: fix homepage, ✅ Assignee: nicolas
   New message:    "urgent"                                            → create, title: "fix homepage", assignee: "nicolas", priority: 1
-  Prior ask had:  ✅ Title: order packaging, ❓ Assignee, ❓ Urgency
-  New message:    "nicolas, high"                                     → create, title: "order packaging", assignee: "nicolas", priority: 2
-  Prior ask had:  ❓ Title, ❓ Assignee, ❓ Urgency
-  New message:    "urgent for shaun"                                  → clarify, missing: ["title"]   (assignee + priority now known)
+  Prior ask had:  ✅ Title: order packaging, ❓ Assignee
+  New message:    "nicolas"                                           → create, title: "order packaging", assignee: "nicolas", priority: 1  (no urgency → default 1)
+  Prior ask had:  ❓ Title, ❓ Assignee
+  New message:    "for shaun"                                         → clarify, missing: ["title"]   (assignee now known)
 
 Output ONLY JSON. No preamble. No code fences.`;
 
@@ -385,7 +386,7 @@ let cleaned = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/
 
 let parsed;
 try { parsed = JSON.parse(cleaned); }
-catch (e) { parsed = { action: 'create', title: ctx.text.slice(0, 70), description: ctx.text, category: 'Other', priority: 3 }; }
+catch (e) { parsed = { action: 'create', title: ctx.text.slice(0, 70), description: ctx.text, category: 'Other', priority: 1 }; }
 
 const action = parsed.action || 'create';
 
@@ -423,7 +424,7 @@ return [{
     title: (p.title || 'Untitled').slice(0, 250),
     description,
     category: p.category || 'Other',
-    priority: typeof p.priority === 'number' ? p.priority : 3,
+    priority: typeof p.priority === 'number' ? p.priority : 1,
     labelIds,
     assigneeId,
     assigneeName: assigneeId ? assigneeName : null,
@@ -458,35 +459,32 @@ return [{ json: {
 CLARIFY_FORMAT_JS = r"""// Build Telegram reply asking for missing ticket fields
 const ctx = $('Parse Intent').first().json._ctx;
 const p = $('Parse Intent').first().json.parsed || {};
-// Only accept real required-field names. Anything else (e.g. Claude shoving a
-// sentence into "missing") gets dropped; if nothing valid remains, ask for all 3.
-const VALID = new Set(['title','assignee','priority']);
+// Only accept real required-field names (priority is NEVER required — it defaults to
+// urgent). Anything else gets dropped; if nothing valid remains, ask for both.
+const VALID = new Set(['title','assignee']);
 let missing = Array.isArray(p.missing) ? p.missing.filter(k => VALID.has(k)) : [];
-if (!missing.length) missing = ['title','assignee','priority'];
+if (!missing.length) missing = ['title','assignee'];
 
 const LABEL = {
   title:    'Title',
   assignee: 'Assignee (rachel | shaun | nicolas | yash | danielle)',
-  priority: 'Urgency (urgent | high | normal | low)',
 };
 const have = {
   title:    p.title || null,
   assignee: p.assignee || null,
-  priority: (typeof p.priority === 'number') ? p.priority : null,
 };
-const PRIORITY_WORD = {1:'urgent', 2:'high', 3:'normal', 4:'low', 0:'no priority'};
 
 const lines = ['🤔 Need a bit more before I file this:'];
-for (const k of ['title','assignee','priority']) {
+for (const k of ['title','assignee']) {
   if (missing.includes(k)) {
     lines.push(`  • ❓ ${LABEL[k]}`);
   } else {
-    let shown = have[k];
-    if (k === 'priority' && shown !== null) shown = PRIORITY_WORD[shown] || shown;
+    const shown = have[k];
     if (shown) lines.push(`  • ✅ ${LABEL[k].split(' (')[0]}: ${shown}`);
   }
 }
 lines.push('');
+lines.push('_(No urgency needed - I default to urgent.)_');
 lines.push('Reply with the missing bits and I\'ll file it.');
 
 return [{ json: {
