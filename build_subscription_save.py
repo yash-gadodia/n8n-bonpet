@@ -5,6 +5,13 @@ alert the team on Telegram weslee + WA broadcast.
 
 Triggered by its own Shopify webhook (separate from Subscribers Ingest), so
 seed/bulk flows through that other workflow don't fire save messages.
+
+*** STALE — DO NOT RE-RUN AS-IS (2026-07-21). Live has drifted: frequency-cap
+cooldown, rewritten copy, marketing-workflow caps, and (2026-07-21) all-status
+routing with per-channel gates via patch_sub_notify_all_events.py. Re-running
+this would clobber that AND break sheet creds (GS_CRED_ID below is the dead
+Cloud-era ID; live uses KLjk8w62GoEMImKa). Source of truth = live JSON;
+patches go through patch_sub_notify_all_events.py. ***
 """
 import json
 import uuid
