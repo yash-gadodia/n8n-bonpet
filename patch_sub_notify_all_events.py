@@ -489,10 +489,32 @@ def patch_save():
     print(f"Activate Save -> HTTP {s}")
 
 
+OMS_GUARD_JS = r"""// BILLING_FAILED is a payment event, not a contract-state change — syncing it
+// onto the OMS subscriptions record would clobber the contract's real status
+// (breaks subscriber detection + the multi-contract guard). Drop it here;
+// it still reaches the Save/notify workflow via Filter Cancel/Pause.
+return $input.all().filter(it => String((it.json||{}).status||'').toUpperCase() !== 'BILLING_FAILED');
+"""
+
+
 def patch_ingest():
     wf = snapshot(INGEST_WF_ID, "ingest_prod_2026-07-21")
     nodes = {n["name"]: n for n in wf["nodes"]}
     nodes["Filter Cancel/Pause"]["parameters"]["jsCode"] = NEW_FILTER_JS
+    if "Skip Billing-Failed for OMS" not in nodes:
+        wf["nodes"].append({
+            "parameters": {"jsCode": OMS_GUARD_JS},
+            "id": uid(), "name": "Skip Billing-Failed for OMS",
+            "type": "n8n-nodes-base.code", "typeVersion": 2,
+            "position": [460, 120],
+        })
+        wf["connections"]["Parse TBP_JSON"] = {"main": [[
+            {"node": "Skip Billing-Failed for OMS", "type": "main", "index": 0},
+            {"node": "Filter Cancel/Pause", "type": "main", "index": 0},
+        ]]}
+        wf["connections"]["Skip Billing-Failed for OMS"] = {"main": [[
+            {"node": "POST to OMS", "type": "main", "index": 0},
+        ]]}
     status, body = http("PUT", f"/workflows/{INGEST_WF_ID}", clean_payload(wf))
     print(f"PUT Subscription Ingest -> HTTP {status}")
     if status >= 300:
@@ -508,6 +530,9 @@ if __name__ == "__main__":
         sys.exit(0)
     if sys.argv[1:] == ["save"]:
         patch_save()
+        sys.exit(0)
+    if sys.argv[1:] == ["ingest"]:
+        patch_ingest()
         sys.exit(0)
     patch_save()
     patch_ingest()
