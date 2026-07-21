@@ -39,3 +39,6 @@ refactor_to_keychain.py
 # Workflow snapshots (contain resolved secrets from keychain at build time)
 .snapshot_*.json
 .snapshots/
+
+# Live workflow snapshots (contain resolved WA API key in HTTP node headers)
+snapshots/
