@@ -66,11 +66,25 @@ CODE_JS = r"""// Meal Plan Follow-up — one WA nudge at D3, one at D7, only if 
 const DRY_RUN = false;
 const YASH_PHONE = '+6581394225';
 const WORKFLOW_TAG = 'meal_plan_followup';
-const MAX_AGE_DAYS = 21;        // plan older than this is stale, stop chasing
 const D3_DAYS = 3;
 const D7_DAYS = 7;
 const MIN_GAP_DAYS = 3;         // never two nudges closer than this
+
+// Fallback for rows with no plan_sent_at: treat a plan-ready row's last_updated
+// as the send time. Added for the 2026-07-29 backfill (52 leads predating the
+// "Mark Plan Sent" node, run at MAX_AGE_DAYS=70 / DAILY_CAP=60 with Yash's sign-off).
+// Kept on permanently: the 9 who got D3 in that run still have no marker, and
+// without this they would never receive their D7.
+const BACKFILL_UNMARKED = true;
+const MAX_AGE_DAYS = 21;        // plan older than this is stale, stop chasing
 const DAILY_CAP = 40;
+
+// Team numbers never receive a customer drip. Without this the backfill would
+// message Nic, Rachel and the rest, who all ran the planner to test it.
+const TEAM_PHONES = new Set([
+  '+6581394225', '+6598531677', '+6590108515', '+6587993341',
+  '+6581114800', '+6282240119788',
+]);
 
 function normalizePhone(p) {
   if (!p) return '';
@@ -190,18 +204,38 @@ const stats = {
   skipped_no_plan_sent: 0, skipped_no_phone: 0, skipped_too_early: 0,
   skipped_stale: 0, skipped_ordered: 0, skipped_subscriber: 0,
   skipped_already_sent: 0, skipped_min_gap: 0, skipped_foreign_cooldown: 0,
-  skipped_blacklist: 0, skipped_cap: 0,
+  skipped_blacklist: 0, skipped_cap: 0, skipped_team: 0, skipped_non_sg: 0,
 };
 const candidates = [];
 const seenPhones = new Set();
 
+// A row only ever received a plan if it had an email AND every pet had recipes
+// picked. That is exactly the "Plan Ready?" gate in TBP Meal Planner Leads.
+// Only used by the backfill, where last_updated stands in for the real marker.
+// Without it, the 89 half-finished rows would be told "we put together X's meal
+// plan" for a plan that was never built.
+function wasPlanReady(r, pets) {
+  if (!String(r.email || '').trim()) return false;
+  return pets.length > 0 && pets.every(p => (p.selectedRecipes || []).length > 0);
+}
+
 for (const r of leads) {
-  const planSent = new Date(r.plan_sent_at || 0).getTime();
+  let pets = [];
+  try { pets = JSON.parse(r.pets_json || '[]'); } catch (e) { pets = []; }
+
+  let planSent = new Date(r.plan_sent_at || 0).getTime();
+  if (!planSent && BACKFILL_UNMARKED && wasPlanReady(r, pets)) {
+    planSent = new Date(r.last_updated || r.timestamp || 0).getTime();
+  }
   if (!planSent) { stats.skipped_no_plan_sent++; continue; }
 
   const phone = normalizePhone(r.whatsapp);
   if (!phone) { stats.skipped_no_phone++; continue; }
   if (seenPhones.has(phone)) continue;  // one nudge per person per run
+  if (TEAM_PHONES.has(phone)) { stats.skipped_team++; continue; }
+  // SG-only: cold chain doesn't leave the island, so a foreign number can't
+  // order anyway. Also drops the junk test rows (+123455677 and friends).
+  if (!/^\+65[689]\d{7}$/.test(phone)) { stats.skipped_non_sg++; continue; }
 
   const daysSince = Math.floor((now - planSent) / DAY_MS);
   if (daysSince < D3_DAYS) { stats.skipped_too_early++; continue; }
@@ -223,8 +257,6 @@ for (const r of leads) {
 
   if (candidates.length >= DAILY_CAP) { stats.skipped_cap++; continue; }
 
-  let pets = [];
-  try { pets = JSON.parse(r.pets_json || '[]'); } catch (e) { pets = []; }
   // Trim: pawrents type trailing spaces into the planner and "Xiaomai 's plan" reads broken.
   const petNames = pets.map(p => String(p.name || '').trim()).filter(Boolean).join(' & ') || 'your furkid';
   const speciesList = pets.map(p => String(p.species || '').toLowerCase());
@@ -254,6 +286,8 @@ const diag = [
   '• Orders read: ' + stats.orders_read,
   '• Skipped (plan never sent): ' + stats.skipped_no_plan_sent,
   '• Skipped (no phone): ' + stats.skipped_no_phone,
+  '• Skipped (team number): ' + stats.skipped_team,
+  '• Skipped (non-SG number): ' + stats.skipped_non_sg,
   '• Skipped (< 3 days): ' + stats.skipped_too_early,
   '• Skipped (> ' + MAX_AGE_DAYS + ' days, stale): ' + stats.skipped_stale,
   '• Skipped (already ordered): ' + stats.skipped_ordered,
