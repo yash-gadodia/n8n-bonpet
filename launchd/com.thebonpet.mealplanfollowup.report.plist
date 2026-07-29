@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.thebonpet.mealplanfollowup.report</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/yash/n8n-bonpet/report_meal_plan_followup.py</string>
+    <string>--telegram</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Year</key><integer>2026</integer>
+    <key>Month</key><integer>8</integer>
+    <key>Day</key><integer>5</integer>
+    <key>Hour</key><integer>10</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key><string>/Users/yash/n8n-bonpet/logs/mealplan_report.log</string>
+  <key>StandardErrorPath</key><string>/Users/yash/n8n-bonpet/logs/mealplan_report.err</string>
+</dict>
+</plist>

@@ -270,6 +270,9 @@ for (const r of leads) {
     target_phone: DRY_RUN ? YASH_PHONE : phone,
     message: DRY_RUN ? '🧪 [DRY · ' + template + ' → ' + name + ' ' + phone + ']\n' + message : message,
     phone: phone,
+    // Carried so results reporting can attribute an order that used a different
+    // number than the WhatsApp one. Not written to wa_sent_log (not a column).
+    email: email,
     workflow: WORKFLOW_TAG,
     template: template,
     sent_at: new Date().toISOString(),
