@@ -63,7 +63,7 @@ WA_KEY = subprocess.check_output(
 ).decode().strip()
 
 CODE_JS = r"""// Meal Plan Follow-up — one WA nudge at D3, one at D7, only if no order landed.
-const DRY_RUN = true;
+const DRY_RUN = false;
 const YASH_PHONE = '+6581394225';
 const WORKFLOW_TAG = 'meal_plan_followup';
 const MAX_AGE_DAYS = 21;        // plan older than this is stale, stop chasing
