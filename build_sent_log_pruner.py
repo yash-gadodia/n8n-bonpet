@@ -31,7 +31,10 @@ API = "https://n8n.thebonpet.com/api/v1"
 WF_ID = "vivE908xnTgEDg8h"
 WF_NAME = "Sent Log Pruner (monthly)"
 WEBHOOK_PATH = "sent-log-pruner-manual-7d2e4a"
-RETENTION_DAYS = 60
+RETENTION_DAYS = 100  # was 60 - but the marketing freq-cap window is 90d, so a 60d
+# prune silently under-counts "3 msgs per 90d" for every sheet-based workflow
+# (found by the 2026-08-02 sheet-vs-API parity check). 100 = 90d window + buffer.
+# Interim fix only: retire this pruner entirely once all 10 workflows read the API.
 
 N8N_KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
 
