@@ -109,6 +109,7 @@ return [{
     days_in_month:          daysInMonth,
     days_elapsed:           daysElapsed,
     days_remaining:         daysRemaining,
+    is_monday:              sgtNow.getUTCDay() === 1,
   }
 }];
 """
@@ -166,6 +167,20 @@ function isSubOrder(o) {
   return false;
 }
 
+// Shopify Basic strips PII from the Orders API (billing_address keeps only
+// country/province, customer carries no name), so names come from the
+// Customers tab of the Orders DB sheet - same source Big Order Alert uses.
+const nameById = new Map();
+try {
+  for (const it of $('Read Customers').all()) {
+    const j = it.json;
+    const id = String(j.customer_id || '');
+    if (!id) continue;
+    const nm = `${j.first_name || ''} ${j.last_name || ''}`.trim();
+    if (nm) nameById.set(id, nm);
+  }
+} catch (e) {}
+
 // Buckets
 const newBucket = () => ({ rev: 0, count: 0, subs: 0 });
 const yest   = newBucket();
@@ -175,6 +190,8 @@ const mtd    = newBucket();
 const priorM = newBucket();
 const offYest = newBucket();
 const offMtd  = newBucket();
+const custLast7  = new Map();   // cid -> { rev, orders, label }
+const custPrior7 = new Set();   // cids that ordered in the prior 7d
 
 // New-customer acquisitions (by customer.created_at falling in window, deduped)
 const seenCust = new Set();
@@ -201,6 +218,19 @@ for (const o of orders) {
     continue;
   }
 
+  // Per-customer rollups for the Monday weekly block (absorbed from the old
+  // standalone Customer Metrics report).
+  const cid = o.customer && o.customer.id ? String(o.customer.id) : null;
+  if (cid) {
+    if (t >= p7Start && t < p7End) custPrior7.add(cid);
+    if (t >= l7Start && t < l7End) {
+      const e = custLast7.get(cid) || { rev: 0, orders: 0 };
+      e.rev += total;
+      e.orders += 1;
+      custLast7.set(cid, e);
+    }
+  }
+
   tally(yest,   t, yStart, yEnd,   total, sub);
   tally(last7,  t, l7Start, l7End, total, sub);
   tally(prior7, t, p7Start, p7End, total, sub);
@@ -223,18 +253,25 @@ for (const o of orders) {
 const aov = (b) => b.count > 0 ? b.rev / b.count : 0;
 
 // Open orders > 24h
-let openCount = 0, oldestMs = null;
+// Only the ACTIONABLE window counts: open >24h but younger than 14 days.
+// The old line counted everything and printed "31 open (oldest 136d)" every
+// single day, unchanged, so nobody read it. Anything older than 14d is a stale
+// record, not today's fulfilment queue.
+const DAY_MS = 24 * 60 * 60 * 1000;
+const STALE_AFTER_DAYS = 14;
+let openCount = 0, oldestMs = null, staleCount = 0;
 const cutoff = new Date(ranges.open_order_cutoff).getTime();
+const staleCutoff = Date.now() - STALE_AFTER_DAYS * DAY_MS;
 for (const o of openOrders) {
   if (!isOnlineOrder(o)) continue;
   const t = new Date(o.created_at).getTime();
-  if (t < cutoff) {
-    openCount++;
-    if (oldestMs === null || t < oldestMs) oldestMs = t;
-  }
+  if (t >= cutoff) continue;
+  if (t < staleCutoff) { staleCount++; continue; }
+  openCount++;
+  if (oldestMs === null || t < oldestMs) oldestMs = t;
 }
 const oldestAgeDays = oldestMs === null ? null
-  : Math.max(1, Math.floor((Date.now() - oldestMs) / (24 * 60 * 60 * 1000)));
+  : Math.max(1, Math.floor((Date.now() - oldestMs) / DAY_MS));
 
 // Refunds yesterday
 let refundCount = 0, refundTotal = 0;
@@ -346,13 +383,29 @@ if (last7.subs < prior7.subs * 0.8 && prior7.subs > 0) {
 if (aov(last7) < aov(prior7) * 0.9 && prior7.count > 0) {
   gaps.push(`AOV down (S$${fmtSGD0(aov(last7))} vs S$${fmtSGD0(aov(prior7))}) · cart size shrinking`);
 }
-if (openCount >= 10) {
-  gaps.push(`Open orders >24h: ${openCount}${oldestAgeDays ? ` (oldest ${oldestAgeDays}d)` : ''} · fulfilment queue debt`);
+if (openCount >= 3) {
+  gaps.push(`Open orders 1-${STALE_AFTER_DAYS}d old: ${openCount}${oldestAgeDays ? ` (oldest ${oldestAgeDays}d)` : ''} · fulfilment queue`);
 }
 if (gaps.length === 0) {
   gaps.push('✅ No immediate red flags');
 }
 const gapBlock = gaps.map(g => `• ${g}`).join('\n');
+
+// --- Monday-only weekly customer block (absorbed Customer Metrics) ---
+let weeklyBlock = '';
+if (ranges.is_monday && last7.count > 0) {
+  let returningOrders = 0;
+  let top = null;
+  for (const [cid, e] of custLast7) {
+    if (custPrior7.has(cid)) returningOrders += e.orders;
+    else if (e.orders > 1)   returningOrders += e.orders - 1;
+    if (!top || e.rev > top.rev) top = { cid, ...e };
+  }
+  const repeatPct = Math.round((returningOrders / last7.count) * 100);
+  const topName = top ? (nameById.get(top.cid) || `customer #${top.cid}`) : null;
+  weeklyBlock = `\n\n👥 *Last 7d customers*\n${newCustIds.last7.size} new · ${repeatPct}% repeat rate`
+    + (top ? `\n🏆 Top: ${topName} · S$${fmtSGD0(top.rev)} (${top.orders} order${top.orders === 1 ? '' : 's'})` : '');
+}
 
 // --- Offline line (only when there was offline activity: no zero rows) ---
 const offlineBlock = offMtd.count > 0
@@ -388,7 +441,7 @@ ${momRows}
 🔎 *Gaps to watch*
 ${gapBlock}
 
-📦 *Yesterday* · S$${fmtSGD0(yest.rev)} · ${yest.count} order${yest.count === 1 ? '' : 's'} · ${refundCount} refund${refundCount === 1 ? '' : 's'}${refundTotal > 0 ? ` (-S$${fmtSGD2(refundTotal)})` : ''} · ${cartRecoveries} cart recover${cartRecoveries === 1 ? 'y' : 'ies'}${offlineBlock}
+📦 *Yesterday* · S$${fmtSGD0(yest.rev)} · ${yest.count} order${yest.count === 1 ? '' : 's'} · ${refundCount} refund${refundCount === 1 ? '' : 's'}${refundTotal > 0 ? ` (-S$${fmtSGD2(refundTotal)})` : ''} · ${cartRecoveries} cart recover${cartRecoveries === 1 ? 'y' : 'ies'}${weeklyBlock}${offlineBlock}
 
 ${statusLine}`;
 
@@ -562,9 +615,24 @@ def build():
         "&limit=250&fields=id,total_price,refunds,updated_at,financial_status,source_name"
     )
 
+    read_customers = {
+        "parameters": {
+            "documentId": {"__rl": True, "value": "1GP0RBDnvl-tHBDRv6DRdrungM2BXM5Z-LnQxmzEeuXI", "mode": "list",
+                           "cachedResultName": "Bon Pet — Customer Orders DB"},
+            "sheetName": {"__rl": True, "value": 100100, "mode": "list", "cachedResultName": "Customers"},
+            "options": {},
+        },
+        "id": uid(), "name": "Read Customers",
+        "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.5,
+        "position": [480, 1000],
+        "credentials": {"googleSheetsOAuth2Api": {"id": "KLjk8w62GoEMImKa", "name": "Google Sheets account"}},
+        "executeOnce": True,
+        "alwaysOutputData": True,
+    }
+
     read_wa_log = read_global_sent_log_node([480, 800])
     filter_wa = native_filter_recent_sent_log_node([640, 800])
-    merge = merge_node("Merge Fetches", [880, 400], 4)
+    merge = merge_node("Merge Fetches", [880, 400], 5)
     aggregate = code_node("Aggregate & Format", [960, 400], AGGREGATE_JS)
 
     wa_sends = [
@@ -578,7 +646,7 @@ def build():
         "Send Telegram LaunchCycle", [1200, 300 + len(RECIPIENTS) * 100]
     )
 
-    nodes = [schedule, manual, set_dates, fetch_orders, fetch_open, fetch_refunds, read_wa_log, filter_wa, merge, aggregate, *wa_sends, telegram_send, telegram_lc]
+    nodes = [schedule, manual, set_dates, fetch_orders, fetch_open, fetch_refunds, read_wa_log, filter_wa, read_customers, merge, aggregate, *wa_sends, telegram_send, telegram_lc]
 
     connections = {
         schedule["name"]:      {"main": [[{"node": set_dates["name"], "type": "main", "index": 0}]]},
@@ -589,6 +657,7 @@ def build():
                 {"node": fetch_open["name"],    "type": "main", "index": 0},
                 {"node": fetch_refunds["name"], "type": "main", "index": 0},
                 {"node": read_wa_log["name"],   "type": "main", "index": 0},
+                {"node": read_customers["name"], "type": "main", "index": 0},
             ]]
         },
         fetch_orders["name"]:  {"main": [[{"node": merge["name"], "type": "main", "index": 0}]]},
@@ -596,6 +665,7 @@ def build():
         fetch_refunds["name"]: {"main": [[{"node": merge["name"], "type": "main", "index": 2}]]},
         read_wa_log["name"]:   {"main": [[{"node": filter_wa["name"], "type": "main", "index": 0}]]},
         filter_wa["name"]:     {"main": [[{"node": merge["name"], "type": "main", "index": 3}]]},
+        read_customers["name"]: {"main": [[{"node": merge["name"], "type": "main", "index": 4}]]},
         merge["name"]:         {"main": [[{"node": aggregate["name"], "type": "main", "index": 0}]]},
         aggregate["name"]:     {"main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*wa_sends, telegram_send, telegram_lc]]]},
     }

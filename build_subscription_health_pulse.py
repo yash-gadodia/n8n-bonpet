@@ -204,9 +204,15 @@ const staleActive   = active.filter(c => {
   const last = lastSubOrderByCust.get(c.customer_id);
   return last && (nowMs - last) > 35 * DAY;
 });
+// At-risk reports what CHANGED this week, not standing state. The old line
+// ("96 paused >21d") printed the same number every week and became wallpaper.
+// The standing count is still visible in the Subscriber base block above.
+const newlyPaused = paused.filter(c =>
+  c.received_at && c.received_at >= last7Start && c.received_at < last7End);
+
 const atRiskLines = [];
-if (pausedTooLong.length > 0) {
-  atRiskLines.push(`• ${pausedTooLong.length} paused >21d (near 42-day cap)`);
+if (newlyPaused.length > 0) {
+  atRiskLines.push(`• ${newlyPaused.length} newly paused this week (of ${pausedTooLong.length} past 21d)`);
 }
 if (staleActive.length > 0) {
   atRiskLines.push(`• ${staleActive.length} active but no sub order in >35d`);
@@ -226,6 +232,28 @@ for (let i = 0; i < 7; i++) {
   }
 }
 
+// Upcoming-bills block: silent on a genuinely quiet week, loud when the data
+// looks broken. 33 active contracts with zero billing dates is not a quiet
+// week, it is a sync problem worth surfacing.
+// "0 upcoming bills" reads as a quiet week, but if EVERY active contract's
+// billing date is already in the past the sheet has simply stopped syncing.
+// Distinguish the two: silent when genuinely quiet, loud when the feed is stale.
+const futureBillDates = active.filter(c => c.upcoming_billing_date && c.upcoming_billing_date >= nowMs).length;
+const latestBillDate = active.reduce(
+  (mx, c) => (c.upcoming_billing_date && c.upcoming_billing_date > mx ? c.upcoming_billing_date : mx), 0);
+const dayFmt = new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Singapore', day: '2-digit', month: 'short'});
+
+let upcomingBlock;
+if (totalUpcoming > 0) {
+  upcomingBlock = `\n\n⏰ *Upcoming bills next 7d:* ${totalUpcoming}\n${upcomingLines.join('\n')}`;
+} else if (active.length > 0 && futureBillDates === 0) {
+  const staleFor = latestBillDate ? Math.floor((nowMs - latestBillDate) / DAY) : null;
+  upcomingBlock = `\n\n⚠️ *Subscribers sheet looks stale* · all ${active.length} active contracts have a past billing date`
+    + (latestBillDate ? ` (latest ${dayFmt.format(new Date(latestBillDate))}, ${staleFor}d ago)` : '');
+} else {
+  upcomingBlock = '';
+}
+
 const totalActivePaused = active.length + paused.length;
 const healthPct = totalActivePaused > 0 ? Math.round((active.length / totalActivePaused) * 100) : 0;
 
@@ -243,10 +271,7 @@ _Week ending ${ranges.week_ending}_
 \`\`\`
 Orders    ${String(cntLast7).padStart(5)} vs ${String(cntPrior7).padStart(5)}   ${pct(cntLast7, cntPrior7)}
 Revenue   S$${String(fmtSGD0(revLast7)).padStart(4)} vs S$${String(fmtSGD0(revPrior7)).padStart(4)}   ${pct(revLast7, revPrior7)}
-\`\`\`
-
-⏰ *Upcoming bills next 7d:* ${totalUpcoming}
-${upcomingLines.length > 0 ? upcomingLines.join('\n') : '   (none scheduled)'}
+\`\`\`${upcomingBlock}
 
 🚨 *At-risk subs*
 ${atRiskLines.length > 0 ? atRiskLines.join('\n') : '   ✅ None flagged'}

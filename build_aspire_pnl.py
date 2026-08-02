@@ -246,11 +246,6 @@ S$${fmtSGD(shopifyRevenue, false)}  (${shopifyOrderCount} orders)
 *Top expense categories*
 ${topLines}
 
-🎯 *${ranges.mtd_month_label} — Day ${ranges.days_elapsed}/${ranges.days_in_month}*
-MTD: S$${fmtSGD0(mtdRevenue)} (${mtdCount} orders)
-Run rate: S$${fmtSGD0(runRate)}/mo  ${statusEmoji} ${statusWord}
-Floor ${pctOf(mtdRevenue, TARGET_FLOOR)}% · Target ${pctOf(mtdRevenue, TARGET_PRIMARY)}% · Stretch ${pctOf(mtdRevenue, TARGET_STRETCH)}%
-
 💳 *Account balances*
 ${balanceLines.join('\n')}`;
 

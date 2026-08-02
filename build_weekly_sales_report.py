@@ -24,6 +24,12 @@ Notes for anyone editing:
   Telegram group. Intentional - do not "fix" it without asking.
 - The credential here is a DIFFERENT Shopify token id to the other builders,
   though both are named "Shopify Access Token n8n".
+
+RETIRED 2026-08-02: deactivated in n8n. Every metric it reported (sales,
+orders, AOV vs prior period) is already in the Morning Briefing's last-7d and
+MTD-vs-prior-month blocks. Kept here so it can be revived with one PUT; note
+the known bug that the Format node reads $json.start_date / $json.end_date,
+which Aggregate Metrics never outputs, so the date line renders blank.
 """
 import json
 import os

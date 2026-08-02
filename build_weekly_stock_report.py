@@ -111,7 +111,10 @@ const healthy = [];
 
 for (const it of dashboardRows) {
   const j = it.json;
-  const product = String(j['FOOD PRODUCTION'] || j.PRODUCT || '').trim();
+  // The merged title cell in row 2 went blank, so n8n now names that column ' '
+  // instead of 'FOOD PRODUCTION'. Every SKU silently vanished and the report
+  // broadcast "No GC SKUs found" every Wednesday. Accept whichever key exists.
+  const product = String(j[' '] || j['FOOD PRODUCTION'] || j.PRODUCT || '').trim();
   if (!product || product === 'PRODUCT') continue;
   if (!product.startsWith('GC ')) continue;
   const balance = Number(j.col_4 !== undefined ? j.col_4 : j.BALANCE);

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build the Customer Metrics workflow and deploy it to n8n (team project)."""
+"""Build the Customer Metrics workflow and deploy it to n8n (team project).
+
+RETIRED 2026-08-02: deactivated in n8n. Its two non-duplicated stats (repeat
+rate, top customer) now render in the Morning Briefing on Mondays only, with
+the customer NAME resolved from the Customers tab rather than a raw id.
+"""
 import json
 import uuid
 import os
