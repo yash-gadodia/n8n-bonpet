@@ -64,8 +64,8 @@ const m2 = fmtMon.format(labelEnd);
 const y  = fmtYear.format(labelEnd);
 
 const weekLabel = (m1 === m2)
-  ? `Week ${d1}–${d2} ${m2} ${y}`
-  : `Week ${d1} ${m1} – ${d2} ${m2} ${y}`;
+  ? `Week ${d1}-${d2} ${m2} ${y}`
+  : `Week ${d1} ${m1} - ${d2} ${m2} ${y}`;
 
 return [{
   json: {
@@ -213,7 +213,7 @@ if (!w.topCustomer) {
   topLine = '_No identified customers this week._';
 } else {
   const tc = w.topCustomer;
-  topLine = `${tc.label} — S$${fmtSGD(tc.revenue)} (${tc.orders} order${tc.orders === 1 ? '' : 's'})`;
+  topLine = `${tc.label} · S$${fmtSGD(tc.revenue)} (${tc.orders} order${tc.orders === 1 ? '' : 's'})`;
 }
 
 const msg = `👥 *Bon Pet Customer Metrics*

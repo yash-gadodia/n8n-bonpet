@@ -67,8 +67,8 @@ const m2 = fmtMon.format(labelEnd);
 const y  = fmtYear.format(labelEnd);
 
 const weekLabel = (m1 === m2)
-  ? `Week ${d1}–${d2} ${m2} ${y}`
-  : `Week ${d1} ${m1} – ${d2} ${m2} ${y}`;
+  ? `Week ${d1}-${d2} ${m2} ${y}`
+  : `Week ${d1} ${m1} - ${d2} ${m2} ${y}`;
 
 return [{
   json: {
@@ -159,7 +159,7 @@ if (topN.length === 0) {
     const rank = idx + 1;
     const mv = movementEmoji(p.product_id, rank);
     const rankStr = String(rank).padStart(2, ' ');
-    return `${rankStr}. ${mv} ${p.title} — S$${fmtSGD(p.revenue)} (${p.units}u)`;
+    return `${rankStr}. ${mv} ${p.title} · S$${fmtSGD(p.revenue)} (${p.units}u)`;
   });
   body = lines.join('\n');
 }
