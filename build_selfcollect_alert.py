@@ -13,6 +13,8 @@ Customer PII (name+phone) is pulled from the Customer Orders DB Google Sheet
 """
 import json, uuid, os, subprocess, urllib.request, urllib.error
 
+from _online_sales import IS_ONLINE_JS
+
 API = "https://n8n.thebonpet.com/api/v1"
 
 # OMS (api.thebonpet.com) is the PII fallback when a brand-new customer isn't in the
@@ -67,6 +69,10 @@ CUSTOMERS_GID = 100100
 FORMAT_JS = r"""// Parse orders/paid, detect self-collect + pickup point, enrich, fan out send-jobs (group ping(s) + IC DM).
 const p = $('Shopify Webhook (orders/paid)').first().json;
 const body = p.body || p;
+
+__IS_ONLINE_JS__
+// Online sales only — a POS sale at an event is handed over on the spot.
+if (!isOnlineOrder(body)) return [];
 
 const shippingLines = body.shipping_lines || [];
 
@@ -249,6 +255,7 @@ jobs.push({ chat_id: LAUNCHCYCLE_CHAT,
 return jobs.map(j => ({ json: Object.assign({ is_self_collect: true, order_name: orderName, pickup_point: point }, j) }));
 """
 FORMAT_JS = (FORMAT_JS
+    .replace("__IS_ONLINE_JS__", IS_ONLINE_JS)
     .replace("__PICKUP_POINTS__", json.dumps(PICKUP_POINTS))
     .replace("__MAIN_CHAT__", TELEGRAM_CHAT_ID)
     .replace("__MAIN_THREAD__", str(TELEGRAM_WESLEE_THREAD_ID))

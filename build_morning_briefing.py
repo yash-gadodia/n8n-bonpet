@@ -8,6 +8,7 @@ import urllib.error
 
 from _notify import telegram_send_node, telegram_launchcycle_node
 from _sent_log import read_global_sent_log_node, native_filter_recent_sent_log_node
+from _online_sales import IS_ONLINE_JS
 import subprocess
 
 API = "https://n8n.thebonpet.com/api/v1"
@@ -155,6 +156,7 @@ function progressBar(pct, width) {
   return '█'.repeat(filled) + '░'.repeat(width - filled);
 }
 function pctOf(rev, target) { return target > 0 ? Math.round((rev / target) * 100) : 0; }
+__IS_ONLINE_JS__
 function isSubOrder(o) {
   // Shopify REST API exposes subscription marker via tags + source_name (not discount_codes;
   // those only carry the synthetic 'Subscription' code in webhook payloads).
@@ -185,6 +187,7 @@ function tally(bucket, t, start, end, total, sub) {
 for (const o of orders) {
   if (o.financial_status !== 'paid' && o.financial_status !== 'partially_refunded') continue;
   if (o.cancelled_at) continue;
+  if (!isOnlineOrder(o)) continue;
   const t = new Date(o.created_at).getTime();
   const total = parseFloat(o.total_price || '0');
   const sub = isSubOrder(o);
@@ -214,6 +217,7 @@ const aov = (b) => b.count > 0 ? b.rev / b.count : 0;
 let openCount = 0, oldestMs = null;
 const cutoff = new Date(ranges.open_order_cutoff).getTime();
 for (const o of openOrders) {
+  if (!isOnlineOrder(o)) continue;
   const t = new Date(o.created_at).getTime();
   if (t < cutoff) {
     openCount++;
@@ -226,6 +230,7 @@ const oldestAgeDays = oldestMs === null ? null
 // Refunds yesterday
 let refundCount = 0, refundTotal = 0;
 for (const o of refundOrders) {
+  if (!isOnlineOrder(o)) continue;
   const fs = o.financial_status;
   if (fs !== 'refunded' && fs !== 'partially_refunded') continue;
   const upd = new Date(o.updated_at).getTime();
@@ -373,7 +378,8 @@ ${statusLine}`;
 return [{ json: { message: msg, revenue_yesterday: yest.rev, revenue_mtd: mtd.rev, run_rate: runRate } }];
 """.replace("__FLOOR__", str(TARGET_FLOOR)) \
    .replace("__PRIMARY__", str(TARGET_PRIMARY)) \
-   .replace("__STRETCH__", str(TARGET_STRETCH))
+   .replace("__STRETCH__", str(TARGET_STRETCH)) \
+   .replace("__IS_ONLINE_JS__", IS_ONLINE_JS)
 
 
 def uid():
@@ -405,13 +411,32 @@ def http(method, path, body=None):
             return e.code, body
 
 
+# Shopify REST caps a page at 250 orders and returns newest-first, so a plain
+# limit=250 fetch silently dropped the OLDEST orders in the window — which is
+# exactly the prior-month comparison period. Follow the Link header instead.
+SHOPIFY_PAGINATION = {
+    # fixedCollection: n8n reads options.pagination.pagination, so this stays
+    # double-nested. A single level saves fine via the API but is ignored.
+    "pagination": {
+      "pagination": {
+        "paginationMode": "responseContainsNextURL",
+        "nextURL": "={{ ($response.headers.link || '').split(',').find(s => s.includes('rel=\"next\"'))?.match(/<([^>]+)>/)?.[1] }}",
+        "paginationCompleteWhen": "other",
+        "completeExpression": "={{ !($response.headers.link || '').includes('rel=\"next\"') }}",
+        "limitPagesFetched": True,
+        "maxRequests": 10,
+      }
+    }
+}
+
+
 def shopify_node(name, pos, url_expr):
     return {
         "parameters": {
             "url": url_expr,
             "authentication": "predefinedCredentialType",
             "nodeCredentialType": "shopifyAccessTokenApi",
-            "options": {},
+            "options": SHOPIFY_PAGINATION,
         },
         "id": uid(),
         "name": name,
@@ -510,14 +535,14 @@ def build():
         "Fetch Open Orders", [480, 400],
         "=" + base + "/orders.json?status=open&fulfillment_status=unshipped"
         "&created_at_max={{ $json.open_order_cutoff }}"
-        "&limit=250&fields=id,created_at,name,fulfillment_status"
+        "&limit=250&fields=id,created_at,name,fulfillment_status,source_name"
     )
     fetch_refunds = shopify_node(
         "Fetch Refunds", [480, 600],
         "=" + base + "/orders.json?status=any"
         "&updated_at_min={{ $json.yesterday_start }}"
         "&updated_at_max={{ $json.yesterday_end }}"
-        "&limit=250&fields=id,total_price,refunds,updated_at,financial_status"
+        "&limit=250&fields=id,total_price,refunds,updated_at,financial_status,source_name"
     )
 
     read_wa_log = read_global_sent_log_node([480, 800])

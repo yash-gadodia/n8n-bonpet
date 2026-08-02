@@ -20,6 +20,7 @@ import urllib.request
 import uuid
 
 from _notify import telegram_send_node, telegram_launchcycle_node
+from _online_sales import IS_ONLINE_JS
 
 API = "https://n8n.thebonpet.com/api/v1"
 WF_NAME = "Subscription Health Pulse"
@@ -110,7 +111,9 @@ const sgtToday    = new Date(ranges.sgt_today).getTime();
 const DAY = 24 * 60 * 60 * 1000;
 const nowMs = Date.now();
 
+__IS_ONLINE_JS__
 function isSubOrder(o) {
+  if (!isOnlineOrder(o)) return false;
   const tags = String(o.tags || '');
   if (/(^|,)\s*Subscription(\s|,|$)/i.test(tags)) return true;
   if (String(o.source_name || '').startsWith('subscription_contract')) return true;
@@ -261,7 +264,7 @@ return [{ json: {
   upcoming_next7: totalUpcoming,
   at_risk: pausedTooLong.length + staleActive.length,
 }}];
-"""
+""".replace("__IS_ONLINE_JS__", IS_ONLINE_JS)
 
 
 def uid():

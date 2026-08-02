@@ -11,6 +11,7 @@ import urllib.error
 import subprocess
 
 from _notify import telegram_send_node, telegram_launchcycle_node
+from _online_sales import OFFLINE_SOURCES
 from _sent_log import (
     read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
@@ -295,6 +296,13 @@ def build():
                     "leftValue": f"={{{{ parseFloat($json.body?.total_price || $json.total_price || '0') }}}}",
                     "rightValue": BIG_ORDER_THRESHOLD_SGD,
                     "operator": {"type": "number", "operation": "gte"},
+                }, {
+                    # Online sales only — a busy expo would otherwise fire this
+                    # alert all day from the POS terminal.
+                    "id": uid(),
+                    "leftValue": "={{ !" + json.dumps(OFFLINE_SOURCES) + ".includes(String($json.body?.source_name || $json.source_name || '').trim().toLowerCase()) }}",
+                    "rightValue": True,
+                    "operator": {"type": "boolean", "operation": "true", "singleValue": True},
                 }],
                 "combinator": "and",
             },
@@ -333,7 +341,9 @@ def build():
         for i, p in enumerate(RECIPIENTS)
     ]
     telegram_send = telegram_send_node(
-        "Send Telegram Weslee", [960, 100 + len(RECIPIENTS) * 90]
+        # This workflow's formatter emits team_msg, not message. Defaulting to
+        # $json.message sent an empty body and Telegram 400'd on every alert.
+        "Send Telegram Weslee", [960, 100 + len(RECIPIENTS) * 90], "={{ $json.team_msg }}"
     )
     telegram_lc = telegram_launchcycle_node(
         "Send Telegram LaunchCycle", [960, 200 + len(RECIPIENTS) * 90], "={{ $json.team_msg }}"

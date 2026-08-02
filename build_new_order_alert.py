@@ -18,6 +18,8 @@ Pipeline: webhook → Read Customers (enrich) → Format → Telegram.
 """
 import json, uuid, os, urllib.request, urllib.error
 
+from _online_sales import IS_ONLINE_JS
+
 API = "https://n8n.thebonpet.com/api/v1"
 WF_NAME = "New Order Alert (all orders) → weslee thread"
 WEBHOOK_PATH = "new-order-alert-7b2e4f8a1c"
@@ -33,9 +35,13 @@ CUSTOMERS_GID = 100100
 ERROR_ALERTER_ID = "c3Vk2nt9WINzp9GH"
 
 
-FORMAT_JS = r"""// Parse Shopify orders/paid payload + enrich + build Telegram message.
+FORMAT_JS = (r"""// Parse Shopify orders/paid payload + enrich + build Telegram message.
 const p = $('Shopify Webhook (orders/paid)').first().json;
 const body = p.body || p;
+
+__IS_ONLINE_JS__
+// Online sales only — POS sales at an expo would otherwise flood the feed.
+if (!isOnlineOrder(body)) return [];
 
 const orderName = body.name || `#${body.order_number || body.id}`;
 const total = body.total_price || '0.00';
@@ -135,9 +141,10 @@ const deliveryDate = ((body.note_attributes || []).find(a => a.name === 'Deliver
 const shipAddr = body.shipping_address || {};
 const addressLine = [shipAddr.address1, shipAddr.address2, shipAddr.zip].filter(Boolean).join(', ') || '(no address)';
 
-// ── Notes ──
+// ── Special instructions (cart note = storefront "Order special instructions") ──
+// Surface LOUD + near the top so the packing team can't miss it.
 const notes = String(body.note || '').trim();
-const notesLine = notes ? `\n📝 Notes: ${notes}` : '';
+const packingAlert = notes ? `\n\n⚠️ *SPECIAL INSTRUCTIONS (read before packing):*\n${notes}` : '';
 
 const createdSgt = new Date(body.created_at || Date.now()).toLocaleString('en-SG', {
   timeZone: 'Asia/Singapore',
@@ -146,7 +153,7 @@ const createdSgt = new Date(body.created_at || Date.now()).toLocaleString('en-SG
 
 const discountLine = visibleDiscount ? `\n🎟️ Code: *${visibleDiscount}*` : '';
 
-const message = `${deliveryEmoji} *New order* ${orderName}
+const message = `${deliveryEmoji} *New order* ${orderName}${packingAlert}
 
 ${historyTag}
 👤 *${fullName}* · ${phone}${email ? '\n📧 ' + email : ''}
@@ -157,7 +164,7 @@ ${historyTag}
 
 📅 ${deliveryMethod}
 📆 ${deliveryDate}
-📍 ${addressLine}${notesLine}
+📍 ${addressLine}
 
 📥 ${createdSgt} SGT`;
 
@@ -170,7 +177,7 @@ return [{
     delivery_method: deliveryMethod,
   }
 }];
-"""
+""").replace("__IS_ONLINE_JS__", IS_ONLINE_JS)
 
 
 def uid(): return str(uuid.uuid4())

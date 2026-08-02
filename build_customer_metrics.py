@@ -7,6 +7,7 @@ import urllib.request
 import urllib.error
 
 from _notify import telegram_send_node, telegram_launchcycle_node
+from _online_sales import IS_ONLINE_JS
 import subprocess
 
 API = "https://n8n.thebonpet.com/api/v1"
@@ -94,10 +95,12 @@ const wEnd    = new Date(ranges.week_end).getTime();
 const pwStart = new Date(ranges.prev_week_start).getTime();
 const pwEnd   = new Date(ranges.prev_week_end).getTime();
 
+__IS_ONLINE_JS__
 function orderInRange(o, rStart, rEnd) {
   const t = new Date(o.created_at).getTime();
   if (t < rStart || t >= rEnd) return false;
   if (o.cancelled_at) return false;
+  if (!isOnlineOrder(o)) return false;
   if (o.financial_status !== 'paid' && o.financial_status !== 'partially_refunded') return false;
   return true;
 }
@@ -236,7 +239,7 @@ return [{
     prev_week: p,
   }
 }];
-"""
+""".replace("__IS_ONLINE_JS__", IS_ONLINE_JS)
 
 
 def uid():
@@ -362,7 +365,7 @@ def build():
         "=" + base + "/orders.json?status=any&financial_status=paid"
         "&created_at_min={{ $json.fetch_start }}"
         "&created_at_max={{ $json.fetch_end }}"
-        "&limit=250&fields=id,cancelled_at,financial_status,created_at,total_price,customer,email,contact_email,billing_address"
+        "&limit=250&fields=id,cancelled_at,financial_status,created_at,total_price,customer,email,contact_email,billing_address,source_name"
     )
 
     aggregate = code_node("Aggregate & Format", [720, 400], AGGREGATE_JS)
