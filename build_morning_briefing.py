@@ -173,6 +173,8 @@ const last7  = newBucket();
 const prior7 = newBucket();
 const mtd    = newBucket();
 const priorM = newBucket();
+const offYest = newBucket();
+const offMtd  = newBucket();
 
 // New-customer acquisitions (by customer.created_at falling in window, deduped)
 const seenCust = new Set();
@@ -187,10 +189,17 @@ function tally(bucket, t, start, end, total, sub) {
 for (const o of orders) {
   if (o.financial_status !== 'paid' && o.financial_status !== 'partially_refunded') continue;
   if (o.cancelled_at) continue;
-  if (!isOnlineOrder(o)) continue;
   const t = new Date(o.created_at).getTime();
   const total = parseFloat(o.total_price || '0');
   const sub = isSubOrder(o);
+
+  // Offline (POS/events) is tracked on its own line, never mixed into the
+  // targets or trend rows — an expo weekend would otherwise read as DTC growth.
+  if (!isOnlineOrder(o)) {
+    tally(offYest, t, yStart, yEnd, total, false);
+    tally(offMtd,  t, mStart, now,  total, false);
+    continue;
+  }
 
   tally(yest,   t, yStart, yEnd,   total, sub);
   tally(last7,  t, l7Start, l7End, total, sub);
@@ -345,6 +354,14 @@ if (gaps.length === 0) {
 }
 const gapBlock = gaps.map(g => `• ${g}`).join('\n');
 
+// --- Offline line (only when there was offline activity: no zero rows) ---
+const offlineBlock = offMtd.count > 0
+  ? `\n\n🏪 *Offline (POS/events)* · not in the figures above\nMTD S$${fmtSGD0(offMtd.rev)} · ${offMtd.count} order${offMtd.count === 1 ? '' : 's'}` +
+    (offYest.count > 0
+      ? ` · yesterday S$${fmtSGD0(offYest.rev)} · ${offYest.count} order${offYest.count === 1 ? '' : 's'}`
+      : '')
+  : '';
+
 // --- Message ---
 const bar = (pct) => progressBar(pct, 10);
 
@@ -371,7 +388,7 @@ ${momRows}
 🔎 *Gaps to watch*
 ${gapBlock}
 
-📦 *Yesterday* · S$${fmtSGD0(yest.rev)} · ${yest.count} order${yest.count === 1 ? '' : 's'} · ${refundCount} refund${refundCount === 1 ? '' : 's'}${refundTotal > 0 ? ` (-S$${fmtSGD2(refundTotal)})` : ''} · ${cartRecoveries} cart recover${cartRecoveries === 1 ? 'y' : 'ies'}
+📦 *Yesterday* · S$${fmtSGD0(yest.rev)} · ${yest.count} order${yest.count === 1 ? '' : 's'} · ${refundCount} refund${refundCount === 1 ? '' : 's'}${refundTotal > 0 ? ` (-S$${fmtSGD2(refundTotal)})` : ''} · ${cartRecoveries} cart recover${cartRecoveries === 1 ? 'y' : 'ies'}${offlineBlock}
 
 ${statusLine}`;
 
