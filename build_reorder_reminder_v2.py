@@ -11,7 +11,7 @@ In DRY RUN, Send WA targets Yash only. Flip DRY_RUN const to false in the Code n
 import json, uuid, os, subprocess, urllib.request, urllib.error
 from _notify import telegram_send_node, telegram_launchcycle_node
 from _sent_log import (
-    read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
+    append_global_sent_log_node,
 )
 from _blacklist import BLACKLIST_JS_SNIPPET
 
@@ -19,6 +19,9 @@ KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
 API = "https://n8n.thebonpet.com/api/v1"
 TEAM = "i1GSXBntwNvNqic8"
 GS_CRED = {"id": "KLjk8w62GoEMImKa", "name": "Google Sheets account"}  # self-hosted ID; old Cloud was sxbz0Cu8yhdi0RdN
+OMS_CRED = {"id": "4pUEOr1SF2Fu4RNl", "name": "TBP OMS WMS PAT"}  # httpHeaderAuth -> Bearer wms-pat
+MARKETING_CSV = "post_trial_nurture,winback,reorder_reminder,trial_graduation,dog_run_invite,sub_reactivation"
+VERIFY_MODE = False  # LIVE - verified 2026-08-02 exec 45659 (funnel sane, keys correct, fail-closed guard in place)
 SHEET_ID = "1GP0RBDnvl-tHBDRv6DRdrungM2BXM5Z-LnQxmzEeuXI"
 REORDER_SENT_GID = 800800
 REORDER_SENT_TAB = "reorder_reminder_sent"
@@ -30,6 +33,61 @@ SEND_WA_DISABLED = False  # flip True for verification, False for live
 WA_URL = "https://api.thebonpet.com/whatsapp/send"
 WA_KEY = subprocess.check_output(["security","find-generic-password","-a","thebonpet","-s","wa-api-key","-w"]).decode().strip()
 YASH_PHONE = "+6581394225"
+
+API_COOLDOWN_JS = r"""
+// --- Global WA cooldown + frequency cap, fed from OMS wa_sent_log via ONE call ---
+// GET /wms/wa-log/cooldown-state replaces the sheet read. last_sent covers ANY
+// workflow over recent_days (transactional included - someone who just got an
+// order confirmation is a recent purchaser no marketing should touch);
+// workflow_sends is row-level for the marketing set over 90d.
+// FAIL CLOSED: a malformed response throws and the run sends NOTHING. The sheet
+// era failed open (empty state -> everyone eligible), the wrong default for the
+// mechanism that prevents spam.
+const SELF_WORKFLOW = "reorder_reminder";
+const MARKETING_WORKFLOWS = new Set(['post_trial_nurture','winback','reorder_reminder','trial_graduation','dog_run_invite','sub_reactivation']);
+const GLOBAL_COOLDOWN_DAYS = 7;
+const GLOBAL_COOLDOWN_MS = GLOBAL_COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+const FREQ_RECENT_DAYS = 14;            // no two DIFFERENT marketing campaigns within this gap
+const FREQ_RECENT_MS = FREQ_RECENT_DAYS * 24 * 60 * 60 * 1000;
+const FREQ_WINDOW_DAYS = 90;            // rolling window for the hard count cap
+const FREQ_WINDOW_MS = FREQ_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+const FREQ_MAX_IN_WINDOW = 3;           // max marketing messages per customer per 90 days
+const GLOBAL_LAST_SENT = new Map();     // phone -> latest send ms (ANY workflow)
+const MKT_SENDS = new Map();            // phone -> [{t, wf}] for MARKETING rows only
+const _state = $('Read Global Sent Log').first().json;
+if (!_state || !Array.isArray(_state.last_sent) || !Array.isArray(_state.workflow_sends)) {
+  throw new Error('cooldown-state response malformed - aborting run, no sends');
+}
+for (const r of _state.last_sent) {
+  const p = normalizePhone(r.phone_number);
+  if (!p) continue;
+  const t = new Date(r.last_sent_at || 0).getTime();
+  if (t > (GLOBAL_LAST_SENT.get(p) || 0)) GLOBAL_LAST_SENT.set(p, t);
+}
+for (const r of _state.workflow_sends) {
+  const p = normalizePhone(r.phone_number);
+  if (!p) continue;
+  const t = new Date(r.sent_at || 0).getTime();
+  if (!t) continue;
+  const wf = String(r.workflow || '').trim();
+  if (MARKETING_WORKFLOWS.has(wf)) {
+    if (!MKT_SENDS.has(p)) MKT_SENDS.set(p, []);
+    MKT_SENDS.get(p).push({ t, wf });
+  }
+}
+function isInGlobalCooldown(phone) {
+  const last = GLOBAL_LAST_SENT.get(phone);
+  if (!last) return false;
+  return (Date.now() - last) < GLOBAL_COOLDOWN_MS;
+}
+function isOverFrequencyCap(phone) {
+  const arr = MKT_SENDS.get(phone) || [];
+  const now = Date.now();
+  const recentOther = arr.some(r => (now - r.t) < FREQ_RECENT_MS && r.wf !== SELF_WORKFLOW);
+  const inWindow = arr.filter(r => (now - r.t) < FREQ_WINDOW_MS).length;
+  return recentOther || inWindow >= FREQ_MAX_IN_WINDOW;
+}
+"""
 
 CODE_JS = r"""// Reorder Reminder v2 — reads orders + subscribers + sent-log for authoritative exclusion.
 // Subscribers sheet auto-updates via Shopify webhook. Sent log updates after each send.
@@ -66,10 +124,11 @@ function normalizePhone(p) {
 // This is the fix for the 3x-in-a-row spam bug. Sheet is appended by Log Sent node post-send.
 const ALREADY_SENT_PHONES = new Set();
 for (const it of $('Read Sent Log').all()) {
-  const p = normalizePhone(it.json.phone);
+  // API rows carry phone_number; legacy sheet rows carried phone.
+  const p = normalizePhone(it.json.phone_number || it.json.phone);
   if (p) ALREADY_SENT_PHONES.add(p);
 }
-""" + COOLDOWN_JS_SNIPPET + BLACKLIST_JS_SNIPPET + r"""
+""" + API_COOLDOWN_JS + BLACKLIST_JS_SNIPPET + r"""
 
 // Rival-workflow guard — don't reorder-nudge if post_trial_nurture sent recently.
 // Janani case (2026-05-20): she got reorder May 1 + post_trial D21 May 11 = 2 reorder-flavoured nudges in 10d.
@@ -78,21 +137,13 @@ const REORDER_RIVAL_DAYS = 30;
 const REORDER_RIVAL_MS = REORDER_RIVAL_DAYS * 24 * 60 * 60 * 1000;
 const REORDER_RIVALS = new Set(['post_trial_nurture']);
 const RECENT_RIVAL_BY_PHONE = new Map();
-let _rivalRows = [];
-try { _rivalRows = $('Filter Recent Sent Log').all(); }
-catch (e) {
-  try { _rivalRows = $('Read Global Sent Log').all(); }
-  catch (e2) { _rivalRows = []; }
-}
-for (const it of _rivalRows) {
-  const s = it.json;
-  if (!REORDER_RIVALS.has(String(s.workflow || ''))) continue;
-  const p = normalizePhone(s.phone);
+for (const r of _state.workflow_sends) {
+  if (!REORDER_RIVALS.has(String(r.workflow || ''))) continue;
+  const p = normalizePhone(r.phone_number);
   if (!p) continue;
-  const t = new Date(s.sent_at || 0).getTime();
+  const t = new Date(r.sent_at || 0).getTime();
   if (!t) continue;
-  const prev = RECENT_RIVAL_BY_PHONE.get(p) || 0;
-  if (t > prev) RECENT_RIVAL_BY_PHONE.set(p, t);
+  if (t > (RECENT_RIVAL_BY_PHONE.get(p) || 0)) RECENT_RIVAL_BY_PHONE.set(p, t);
 }
 function isInRivalNudgeWindow(phone) {
   const last = RECENT_RIVAL_BY_PHONE.get(phone);
@@ -268,6 +319,10 @@ for (const [key, custOrders] of sortedEntries) {
     candidates.push({
       ...baseFields,
       seq: seq,
+      // Deterministic per (phone, order, reminder, burst-seq): a double-fired
+      // trigger or parallel execution collapses onto one send at the DB UNIQUE
+      // constraint - the structural fix the sheet never had.
+      idempotency_key: 'reorder:' + phone.replace(/\D/g, '') + ':' + last.order_id + ':r' + reminderNum + ':s' + seq,
       target_phone: DRY_RUN ? YASH_PHONE : phone,
       message: DRY_RUN ? dryPrefix + liveMsg : liveMsg,
     });
@@ -397,6 +452,9 @@ def send_wa_node():
             "bodyParameters": {"parameters": [
                 {"name": "phone_number", "value": "={{ $json.target_phone }}"},
                 {"name": "message", "value": "={{ $json.message }}"},
+                {"name": "idempotency_key", "value": "={{ $json.idempotency_key || '' }}"},
+                {"name": "workflow", "value": "={{ $json.workflow || '' }}"},
+                {"name": "template", "value": "={{ $json.template || '' }}"},
             ]},
             # 2s batching = each customer experiences a ~4s 3-burst before next customer's burst
             "options": {
@@ -466,9 +524,29 @@ read_subs = gs_read_node("Read Subscribers", 700700, "subscribers", [480, 200])
 # CRITICAL: executeOnce=True — otherwise Read Subscribers runs once per input
 # item from Read Orders (1979 times) and OOMs the workflow.
 read_subs["executeOnce"] = True
-read_sent_log = gs_read_node("Read Sent Log", REORDER_SENT_GID, REORDER_SENT_TAB, [480, 400])
-read_sent_log["executeOnce"] = True
-read_global = read_global_sent_log_node([480, 600])
+def api_read_node(name, url, position):
+    # No alwaysOutputData / onError: if the OMS is unreachable the node fails and
+    # the run halts BEFORE computing candidates - fail closed, no sends.
+    return {
+        "parameters": {"method": "GET", "url": url,
+                       "authentication": "genericCredentialType",
+                       "genericAuthType": "httpHeaderAuth", "options": {}},
+        "id": uid(), "name": name,
+        "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+        "position": position,
+        "credentials": {"httpHeaderAuth": OMS_CRED},
+        "executeOnce": True,
+    }
+
+
+read_sent_log = api_read_node(
+    "Read Sent Log",
+    "https://api.thebonpet.com/wms/wa-log/recent?workflow=reorder_reminder&limit=1000",
+    [480, 400])
+read_global = api_read_node(
+    "Read Global Sent Log",
+    "https://api.thebonpet.com/wms/wa-log/cooldown-state?recent_days=8&window_days=90&workflows=" + MARKETING_CSV,
+    [480, 600])
 code = code_node()
 send_wa = send_wa_node()
 skip_header = skip_header_filter_node()
@@ -477,6 +555,10 @@ log_global = append_global_sent_log_node([1680, 300])
 pass_header = pass_header_only_node()
 send_telegram = telegram_send_node("Send Telegram Weslee", [1440, 500])
 send_telegram_lc = telegram_launchcycle_node("Send Telegram LaunchCycle", [1440, 620])
+
+if VERIFY_MODE:
+    for _n in (send_wa, log_sent, log_global, send_telegram, send_telegram_lc):
+        _n["disabled"] = True
 
 nodes = [schedule, webhook, read_orders, read_subs, read_sent_log, read_global, code,
          send_wa, skip_header, log_sent, log_global, pass_header, send_telegram, send_telegram_lc]
