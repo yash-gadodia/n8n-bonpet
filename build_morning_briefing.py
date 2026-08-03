@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Build the Morning Briefing workflow = Daily Pulse + Goal Tracking merged into one 9 AM SGT send."""
+"""Build the Morning Briefing workflow = Daily Pulse + Goal Tracking merged into one 9 AM SGT send.
+
+Monday-only blocks absorbed from retired standalone reports (2026-08-03):
+  - Top Sellers (top-5 by revenue, W-o-W movement) - in the message for everyone
+  - Aspire Weekly P&L (cash in/out/net, top spend, balances) - SENSITIVE, appended
+    only to message_founders: Yash + Nic WA sends and the weslee Telegram copy.
+    Launch Cycle and non-founder WA recipients get the plain message (matches the
+    old standalone recipient split).
+"""
 import json
 import uuid
 import os
@@ -33,6 +41,13 @@ RECIPIENTS = [
     "+6583513308",  # Siva (Launch Cycle agency - external)
     "+6588146498",  # Raghav (Launch Cycle agency - external)
 ]
+# P&L is founders-only on WA (same split as the retired standalone Aspire P&L)
+FOUNDER_NUMBERS = {"+6581394225", "+6598531677"}
+
+# Aspire (keychain, NOT literals - this repo is public)
+ASPIRE_BASE = "https://api.aspireapp.com/public/v1"
+ASPIRE_CLIENT_ID = subprocess.check_output(["security","find-generic-password","-a","thebonpet","-s","aspire-client-id","-w"]).decode().strip()
+ASPIRE_API_KEY = subprocess.check_output(["security","find-generic-password","-a","thebonpet","-s","aspire-api-key","-w"]).decode().strip()
 
 # Goal tiers
 TARGET_FLOOR   = 6500
@@ -81,6 +96,20 @@ const daysInMonth   = Math.round((monthEnd - monthStart) / DAY);
 const daysElapsed   = dSgt;
 const daysRemaining = daysInMonth - daysElapsed;
 
+// Last complete Mon-Sun week (Monday-only Top Sellers + P&L blocks; same
+// window the standalone Top Sellers / Aspire P&L reports used)
+const dow = sgtNow.getUTCDay();
+const daysSinceMonday = (dow + 6) % 7;
+const weekEnd   = sgtMidnightToday - daysSinceMonday * DAY;
+const weekStart = weekEnd - 7 * DAY;
+const prevWeekStart = weekStart - 7 * DAY;
+const dayF = new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Singapore', day: '2-digit'});
+const monF = new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Singapore', month: 'short'});
+const wl1 = new Date(weekStart), wl2 = new Date(weekEnd - 1);
+const weekLabel = (monF.format(wl1) === monF.format(wl2))
+  ? `${dayF.format(wl1)}-${dayF.format(wl2)} ${monF.format(wl2)}`
+  : `${dayF.format(wl1)} ${monF.format(wl1)} - ${dayF.format(wl2)} ${monF.format(wl2)}`;
+
 const dateFmt = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Asia/Singapore',
   weekday: 'short', day: '2-digit', month: 'short', year: 'numeric'
@@ -110,6 +139,10 @@ return [{
     days_elapsed:           daysElapsed,
     days_remaining:         daysRemaining,
     is_monday:              sgtNow.getUTCDay() === 1,
+    week_start:             new Date(weekStart).toISOString(),
+    week_end:               new Date(weekEnd).toISOString(),
+    prev_week_start:        new Date(prevWeekStart).toISOString(),
+    week_label:             weekLabel,
   }
 }];
 """
@@ -407,6 +440,99 @@ if (ranges.is_monday && last7.count > 0) {
     + (top ? `\n🏆 Top: ${topName} · S$${fmtSGD0(top.rev)} (${top.orders} order${top.orders === 1 ? '' : 's'})` : '');
 }
 
+// --- Monday-only Top Sellers block (absorbed Top Seller Leaderboard) ---
+let topSellersBlock = '';
+if (ranges.is_monday) {
+  const wStart  = new Date(ranges.week_start).getTime();
+  const wEnd    = new Date(ranges.week_end).getTime();
+  const pwStart = new Date(ranges.prev_week_start).getTime();
+  const weekBucket = {}, prevBucket = {};
+  for (const o of orders) {
+    if (o.cancelled_at) continue;
+    if (!isOnlineOrder(o)) continue;
+    if (o.financial_status !== 'paid' && o.financial_status !== 'partially_refunded') continue;
+    const t = new Date(o.created_at).getTime();
+    const bucket = (t >= wStart && t < wEnd) ? weekBucket : (t >= pwStart && t < wStart) ? prevBucket : null;
+    if (!bucket) continue;
+    for (const li of (o.line_items || [])) {
+      const pid = li.product_id || `title:${li.title}`;
+      const qty = Number(li.quantity || 0);
+      if (!bucket[pid]) bucket[pid] = { title: String(li.title || 'Unknown').trim(), units: 0, revenue: 0 };
+      if (String(li.title || '').trim().length > bucket[pid].title.length) bucket[pid].title = String(li.title).trim();
+      bucket[pid].units += qty;
+      bucket[pid].revenue += qty * parseFloat(li.price || '0');
+    }
+  }
+  const rankList = (b) => Object.entries(b).sort((x, y) => y[1].revenue - x[1].revenue);
+  const weekRanked = rankList(weekBucket);
+  const prevRank = new Map(rankList(prevBucket).map(([pid], i) => [pid, i + 1]));
+  const movement = (pid, rank) => {
+    const prev = prevRank.get(pid);
+    if (prev === undefined) return '🆕';
+    const delta = prev - rank;
+    if (delta === 0) return '➡️';
+    return delta > 0 ? `⬆️${delta}` : `⬇️${Math.abs(delta)}`;
+  };
+  const totalWeekRev = weekRanked.reduce((s, [, p]) => s + p.revenue, 0);
+  const top5 = weekRanked.slice(0, 5);
+  const top5Rev = top5.reduce((s, [, p]) => s + p.revenue, 0);
+  const top5Pct = totalWeekRev > 0 ? Math.round((top5Rev / totalWeekRev) * 100) : 0;
+  const lines = top5.length
+    ? top5.map(([pid, p], i) => `${i + 1}. ${movement(pid, i + 1)} ${p.title} · S$${fmtSGD0(p.revenue)} (${p.units}u)`).join('\n')
+    : '_(no paid orders last week)_';
+  topSellersBlock = `\n\n🏆 *Top sellers (${ranges.week_label})*\n${lines}`
+    + (top5.length ? `\n_Top-5: S$${fmtSGD0(top5Rev)} · ${top5Pct}% of week_` : '');
+}
+
+// --- Monday-only Aspire P&L block (absorbed Aspire P&L report) ---
+// SENSITIVE: appended only to message_founders (Yash + Nic WA, weslee TG).
+// Launch Cycle + non-founder WA get the plain message without it.
+let pnlBlock = '';
+if (ranges.is_monday) {
+  function tryReadNode(name) { try { return $(name).all(); } catch (e) { return []; } }
+  function unwrapAspire(items) {
+    if (!items.length) return [];
+    const first = items[0].json || {};
+    if (Array.isArray(first.data)) return first.data;
+    return items.map(it => it.json).filter(x => x && x.id);
+  }
+  const txns  = unwrapAspire(tryReadNode('Fetch Aspire Txns'));
+  const accts = unwrapAspire(tryReadNode('Fetch Aspire Accounts'));
+  if (!txns.length && !accts.length) {
+    pnlBlock = `\n\n💼 *Weekly P&L (${ranges.week_label})*\n⚠️ Aspire data unavailable this run - check n8n execution`;
+  } else {
+    const wStart = new Date(ranges.week_start).getTime();
+    const wEnd   = new Date(ranges.week_end).getTime();
+    let inC = 0, outC = 0, inN = 0, outN = 0;
+    const byCat = new Map();
+    for (const t of txns) {
+      const tms = new Date(t.datetime).getTime();
+      if (tms < wStart || tms >= wEnd) continue;
+      if (t.status && t.status !== 'settled') continue;
+      const amt = Number(t.amount || 0);
+      if (amt > 0) { inC += amt; inN++; }
+      else if (amt < 0) {
+        outC += -amt; outN++;
+        const cat = (t.additional_info && t.additional_info.spend_category) || t.channel || 'Uncategorized';
+        byCat.set(cat, (byCat.get(cat) || 0) + (-amt));
+      }
+    }
+    const net = inC - outC;
+    const cents = (c) => (c / 100).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    const catLines = [...byCat.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([cat, tot], i) => `${i + 1}. ${cat} · S$${cents(tot)}`).join('\n');
+    const balLines = accts.map(a => {
+      const nm = (a.debit_details && a.debit_details[0] && a.debit_details[0].account_number) || String(a.id || '').slice(0, 8);
+      return `• ${nm}  S$${cents(a.available_balance)}`;
+    }).join('\n');
+    pnlBlock = `\n\n💼 *Weekly P&L (${ranges.week_label})* 🔒
+💰 In S$${cents(inC)} (${inN}) · 💸 Out S$${cents(outC)} (${outN})
+📊 Net ${net >= 0 ? '+' : '-'}S$${cents(Math.abs(net))}`
+      + (catLines ? `\n*Top spend:*\n${catLines}` : '')
+      + (balLines ? `\n*Balances:*\n${balLines}` : '');
+  }
+}
+
 // --- Offline line (only when there was offline activity: no zero rows) ---
 const offlineBlock = offMtd.count > 0
   ? `\n\n🏪 *Offline (POS/events)* · not in the figures above\nMTD S$${fmtSGD0(offMtd.rev)} · ${offMtd.count} order${offMtd.count === 1 ? '' : 's'}` +
@@ -441,11 +567,13 @@ ${momRows}
 🔎 *Gaps to watch*
 ${gapBlock}
 
-📦 *Yesterday* · S$${fmtSGD0(yest.rev)} · ${yest.count} order${yest.count === 1 ? '' : 's'} · ${refundCount} refund${refundCount === 1 ? '' : 's'}${refundTotal > 0 ? ` (-S$${fmtSGD2(refundTotal)})` : ''} · ${cartRecoveries} cart recover${cartRecoveries === 1 ? 'y' : 'ies'}${weeklyBlock}${offlineBlock}
+📦 *Yesterday* · S$${fmtSGD0(yest.rev)} · ${yest.count} order${yest.count === 1 ? '' : 's'} · ${refundCount} refund${refundCount === 1 ? '' : 's'}${refundTotal > 0 ? ` (-S$${fmtSGD2(refundTotal)})` : ''} · ${cartRecoveries} cart recover${cartRecoveries === 1 ? 'y' : 'ies'}${weeklyBlock}${topSellersBlock}${offlineBlock}
 
 ${statusLine}`;
 
-return [{ json: { message: msg, revenue_yesterday: yest.rev, revenue_mtd: mtd.rev, run_rate: runRate } }];
+const msgFounders = pnlBlock ? msg + pnlBlock : msg;
+
+return [{ json: { message: msg, message_founders: msgFounders, revenue_yesterday: yest.rev, revenue_mtd: mtd.rev, run_rate: runRate } }];
 """.replace("__FLOOR__", str(TARGET_FLOOR)) \
    .replace("__PRIMARY__", str(TARGET_PRIMARY)) \
    .replace("__STRETCH__", str(TARGET_STRETCH)) \
@@ -541,7 +669,7 @@ def merge_node(name, pos, n_inputs):
     }
 
 
-def whatsapp_node(name, pos, phone):
+def whatsapp_node(name, pos, phone, msg_expr="={{ $json.message }}"):
     return {
         "parameters": {
             "method": "POST",
@@ -554,7 +682,7 @@ def whatsapp_node(name, pos, phone):
             "sendBody": True,
             "bodyParameters": {"parameters": [
                 {"name": "phone_number", "value": phone},
-                {"name": "message", "value": "={{ $json.message }}"},
+                {"name": "message", "value": msg_expr},
             ]},
             "options": {},
         },
@@ -599,7 +727,7 @@ def build():
         "=" + base + "/orders.json?status=any&financial_status=paid"
         "&created_at_min={{ $json.fetch_start }}"
         "&created_at_max={{ $json.fetch_end }}"
-        "&limit=250&fields=id,total_price,created_at,customer,financial_status,cancelled_at,tags,source_name"
+        "&limit=250&fields=id,total_price,created_at,customer,financial_status,cancelled_at,tags,source_name,line_items"
     )
     fetch_open = shopify_node(
         "Fetch Open Orders", [480, 400],
@@ -632,21 +760,83 @@ def build():
 
     read_wa_log = read_global_sent_log_node([480, 800])
     filter_wa = native_filter_recent_sent_log_node([640, 800])
-    merge = merge_node("Merge Fetches", [880, 400], 5)
+
+    # Aspire chain (for the Monday-only P&L block). Runs daily — cheap — and the
+    # aggregate only renders it on Mondays. onError keeps the briefing sending
+    # even if Aspire is down (block then says "data unavailable").
+    aspire_login = {
+        "parameters": {
+            "method": "POST",
+            "url": f"{ASPIRE_BASE}/login",
+            "sendHeaders": True,
+            "headerParameters": {"parameters": [
+                {"name": "Content-Type", "value": "application/json"},
+            ]},
+            "sendBody": True,
+            "specifyBody": "json",
+            "jsonBody": json.dumps({
+                "grant_type": "client_credentials",
+                "client_id": ASPIRE_CLIENT_ID,
+                "client_secret": ASPIRE_API_KEY,
+            }),
+            "options": {},
+        },
+        "id": uid(), "name": "Aspire Login",
+        "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+        "position": [480, 1200],
+        "onError": "continueRegularOutput",
+    }
+    aspire_txns = {
+        "parameters": {
+            "method": "GET",
+            "url": "=" + ASPIRE_BASE + "/transactions?start_date={{ $('Set Date Ranges').first().json.week_start }}&end_date={{ $('Set Date Ranges').first().json.week_end }}&per_page=1000",
+            "sendHeaders": True,
+            "headerParameters": {"parameters": [
+                {"name": "Authorization", "value": "=Bearer {{ $json.access_token }}"},
+            ]},
+            "options": {},
+        },
+        "id": uid(), "name": "Fetch Aspire Txns",
+        "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+        "position": [720, 1150],
+        "onError": "continueRegularOutput",
+    }
+    aspire_accts = {
+        "parameters": {
+            "method": "GET",
+            "url": f"{ASPIRE_BASE}/accounts",
+            "sendHeaders": True,
+            "headerParameters": {"parameters": [
+                {"name": "Authorization", "value": "=Bearer {{ $('Aspire Login').first().json.access_token }}"},
+            ]},
+            "options": {},
+        },
+        "id": uid(), "name": "Fetch Aspire Accounts",
+        "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+        "position": [720, 1300],
+        "onError": "continueRegularOutput",
+    }
+
+    merge = merge_node("Merge Fetches", [880, 400], 7)
     aggregate = code_node("Aggregate & Format", [960, 400], AGGREGATE_JS)
 
     wa_sends = [
-        whatsapp_node(f"Send WhatsApp #{i+1}", [1200, 200 + i * 100], p)
+        whatsapp_node(
+            f"Send WhatsApp #{i+1}", [1200, 200 + i * 100], p,
+            "={{ $json.message_founders }}" if p in FOUNDER_NUMBERS else "={{ $json.message }}",
+        )
         for i, p in enumerate(RECIPIENTS)
     ]
     telegram_send = telegram_send_node(
-        "Send Telegram Weslee", [1200, 200 + len(RECIPIENTS) * 100]
+        "Send Telegram Weslee", [1200, 200 + len(RECIPIENTS) * 100],
+        "={{ $json.message_founders }}",
     )
     telegram_lc = telegram_launchcycle_node(
         "Send Telegram LaunchCycle", [1200, 300 + len(RECIPIENTS) * 100]
     )
 
-    nodes = [schedule, manual, set_dates, fetch_orders, fetch_open, fetch_refunds, read_wa_log, filter_wa, read_customers, merge, aggregate, *wa_sends, telegram_send, telegram_lc]
+    nodes = [schedule, manual, set_dates, fetch_orders, fetch_open, fetch_refunds, read_wa_log, filter_wa, read_customers,
+             aspire_login, aspire_txns, aspire_accts, merge, aggregate, *wa_sends, telegram_send, telegram_lc]
 
     connections = {
         schedule["name"]:      {"main": [[{"node": set_dates["name"], "type": "main", "index": 0}]]},
@@ -658,6 +848,7 @@ def build():
                 {"node": fetch_refunds["name"], "type": "main", "index": 0},
                 {"node": read_wa_log["name"],   "type": "main", "index": 0},
                 {"node": read_customers["name"], "type": "main", "index": 0},
+                {"node": aspire_login["name"],  "type": "main", "index": 0},
             ]]
         },
         fetch_orders["name"]:  {"main": [[{"node": merge["name"], "type": "main", "index": 0}]]},
@@ -666,6 +857,12 @@ def build():
         read_wa_log["name"]:   {"main": [[{"node": filter_wa["name"], "type": "main", "index": 0}]]},
         filter_wa["name"]:     {"main": [[{"node": merge["name"], "type": "main", "index": 3}]]},
         read_customers["name"]: {"main": [[{"node": merge["name"], "type": "main", "index": 4}]]},
+        aspire_login["name"]:  {"main": [[
+            {"node": aspire_txns["name"],  "type": "main", "index": 0},
+            {"node": aspire_accts["name"], "type": "main", "index": 0},
+        ]]},
+        aspire_txns["name"]:   {"main": [[{"node": merge["name"], "type": "main", "index": 5}]]},
+        aspire_accts["name"]:  {"main": [[{"node": merge["name"], "type": "main", "index": 6}]]},
         merge["name"]:         {"main": [[{"node": aggregate["name"], "type": "main", "index": 0}]]},
         aggregate["name"]:     {"main": [[{"node": n["name"], "type": "main", "index": 0} for n in [*wa_sends, telegram_send, telegram_lc]]]},
     }

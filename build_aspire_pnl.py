@@ -20,11 +20,12 @@ WF_NAME = "Aspire P&L - WhatsApp"
 TEAM_PROJECT_ID = "i1GSXBntwNvNqic8"
 MANUAL_WEBHOOK_ID = "aspire-pnl-manual-7c4b9e2f8a"
 
-# Aspire creds (currently hardcoded in node parameters — fine since workflow JSON
-# stays inside n8n Cloud instance; matches existing WA_KEY pattern)
+# Aspire creds from keychain — this repo is PUBLIC; the old literals here sat in
+# git history until 2026-08-03 and the key should be rotated in the Aspire
+# dashboard (then: security add-generic-password -U -a thebonpet -s aspire-api-key -w <new>)
 ASPIRE_BASE = "https://api.aspireapp.com/public/v1"
-ASPIRE_CLIENT_ID = "***REMOVED-ROTATE-ME***"
-ASPIRE_API_KEY = "***REMOVED-ROTATE-ME***"
+ASPIRE_CLIENT_ID = subprocess.check_output(["security","find-generic-password","-a","thebonpet","-s","aspire-client-id","-w"]).decode().strip()
+ASPIRE_API_KEY = subprocess.check_output(["security","find-generic-password","-a","thebonpet","-s","aspire-api-key","-w"]).decode().strip()
 
 # Shopify for revenue cross-reference
 SHOPIFY_STORE = "d2ac44-d5"
