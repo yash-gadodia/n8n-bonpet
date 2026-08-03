@@ -27,7 +27,7 @@ OLD_WF_NAME = "Negative Review Watcher - WhatsApp"  # migrate from this if found
 TEAM_PROJECT_ID = "i1GSXBntwNvNqic8"
 MANUAL_WEBHOOK_ID = "review-watcher-manual-8e3c7a1f4d"  # unchanged from original
 
-GOOGLE_PLACES_API_KEY = "***REMOVED***"
+GOOGLE_PLACES_API_KEY = subprocess.check_output(["security","find-generic-password","-a","thebonpet","-s","google-places-api-key","-w"]).decode().strip()
 BON_PET_PLACE_ID      = "ChIJqWbpqTwX2jERSJWIxogqqsg"
 
 NEGATIVE_STAR_THRESHOLD = 2  # <= this → team alert + customer apology (if matched)

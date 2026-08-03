@@ -28,7 +28,7 @@ WF_NAME = "Negative Review Watcher - WhatsApp"
 TEAM_PROJECT_ID = "i1GSXBntwNvNqic8"
 MANUAL_WEBHOOK_ID = "neg-review-manual-8e3c7a1f4d"
 
-GOOGLE_PLACES_API_KEY = "***REMOVED***"
+GOOGLE_PLACES_API_KEY = subprocess.check_output(["security","find-generic-password","-a","thebonpet","-s","google-places-api-key","-w"]).decode().strip()
 BON_PET_PLACE_ID      = "ChIJqWbpqTwX2jERSJWIxogqqsg"
 
 # Rating threshold: alert on reviews at or below this
