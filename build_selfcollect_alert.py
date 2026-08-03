@@ -2,8 +2,11 @@
 """Self-Collection Order Alert - routes each self-collect order to the right pickup
 IC in Telegram, keyed on the postal code in the "Self-Collection - <postal>" shipping title.
 
-  448908 / legacy "Self-Collection"  ->  Siglap (Yash):   main weslee thread tag + DM
-  681810                              ->  CCK (Chandani):  her group tag + main thread info + DM
+No weslee posts since 2026-08-03 — the combined New Order Alert is the single weslee
+order feed. This workflow keeps only the IC-facing sends:
+
+  448908 / legacy "Self-Collection"  ->  Siglap (Yash):   DM
+  681810                              ->  CCK (Chandani):  her group tag + DM
 
 Trigger: Shopify orders/paid webhook (registered separately, see bottom).
 Pipeline: webhook -> Read Customers (enrich) -> Format Alert (fan out send-jobs) -> IF self-collect -> Telegram.
@@ -208,16 +211,16 @@ const YASH_USERNAME = '__YASH_USERNAME__';
 const YASH_DM = __YASH_DM__;
 const LAUNCHCYCLE_CHAT = '__LC_CHAT__';
 
+// Weslee main-thread posts removed 2026-08-03 — the combined New Order Alert is now the
+// single weslee order feed (it labels pickup point + tags Yash for Siglap). This workflow
+// keeps only the IC-facing sends: pickup-point group pings, IC DMs, Launch Cycle copy.
 const jobs = [];
 if (point === 'cck') {
   const tag = CHANDANI_USERNAME ? `@${CHANDANI_USERNAME}` : 'Chandani';
   // 1) Chandani's group, actionable + tagged
   jobs.push({ chat_id: CHANDANI_CHAT,
     text: `🏪 *Self-collect order · CCK* ${orderName}\n\n${summary}\n\n${tag} heads up, please queue this for pickup at the CCK point. 📦` });
-  // 2) main team thread, visibility only (no tag)
-  jobs.push({ chat_id: MAIN_CHAT, message_thread_id: MAIN_THREAD,
-    text: `🏪 *Self-collect order · CCK (Chandani's point)* ${orderName}\n\n${summary}` });
-  // 3) DM Chandani to pack (only once she has registered with the bot)
+  // 2) DM Chandani to pack (only once she has registered with the bot)
   if (CHANDANI_DM) {
     jobs.push({ chat_id: CHANDANI_DM,
       text: `📦 *New CCK self-collect order to pack* ${orderName}\n\n${summary}` });
@@ -227,20 +230,14 @@ if (point === 'cck') {
   // 1) KC's group, actionable + tagged
   jobs.push({ chat_id: KC_CHAT,
     text: `🏪 *Self-collect order · Stevens* ${orderName}\n\n${summary}\n\n${tag} heads up, please queue this for pickup at the Stevens point. 📦` });
-  // 2) main team thread, visibility only (no tag)
-  jobs.push({ chat_id: MAIN_CHAT, message_thread_id: MAIN_THREAD,
-    text: `🏪 *Self-collect order · Stevens (KC's point)* ${orderName}\n\n${summary}` });
-  // 3) DM Kc to pack (only once they have registered with the bot)
+  // 2) DM Kc to pack (only once they have registered with the bot)
   if (KC_DM) {
     jobs.push({ chat_id: KC_DM,
       text: `📦 *New Stevens self-collect order to pack* ${orderName}\n\n${summary}` });
   }
 } else {
   // Siglap (448908 / legacy bare "Self-Collection") - also the default for any unknown pickup
-  // 1) main team thread, actionable + tag Yash
-  jobs.push({ chat_id: MAIN_CHAT, message_thread_id: MAIN_THREAD,
-    text: `🏪 *Self-collect order · Siglap* ${orderName}\n\n${summary}\n\n@${YASH_USERNAME} heads up, queue for pickup at the Siglap freezer. 📦` });
-  // 2) DM Yash to pack
+  // DM Yash to pack (weslee tag comes from the combined New Order Alert)
   if (YASH_DM) {
     jobs.push({ chat_id: YASH_DM,
       text: `📦 *New Siglap self-collect order to pack* ${orderName}\n\n${summary}` });

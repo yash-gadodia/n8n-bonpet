@@ -2,15 +2,20 @@
 """New Order Alert (all orders) → weslee thread.
 
 Fires for every paid Shopify order. Posts to Team Bon Pet → weslee thread (34253).
-Self-collect orders ALSO continue firing the existing dedicated Self-Collect
-Order Alert in the ops thread (user chose 'Keep both , self-collect gets an
-extra loud ping').
 
-Payload categories included (per user selection):
+THE single combined weslee order feed (consolidated 2026-08-03): self-collect
+orders and big orders no longer get separate weslee posts — this one message
+carries the pickup-point label, the BIG ORDER flag (>= S$200, matches Big Order
+Alert threshold) and lifetime stats. The Self-Collect Order Alert still handles
+IC group pings/DMs + Launch Cycle; Big Order Alert still handles team WA +
+customer thank-you. Neither posts to weslee anymore.
+
+Payload categories included:
   • Basics: order_name, customer name, phone
   • Items + total $ + discount code
-  • Delivery method + date + address
+  • Delivery method (incl. pickup point) + date + address
   • Customer history tag (1st order / returning Nth / sub renewal)
+  • Big-order flag + lifetime orders/spent + Shopify admin link
 
 Trigger: Shopify orders/paid webhook (URL must be registered in Shopify Admin
 once after deploy , see end of script).
@@ -53,32 +58,36 @@ const ordersCount = Number((body.customer || {}).orders_count || 1);
 // ── Delivery method (from shipping_lines.title , matches OMS derivation) ──
 const shippingLines = body.shipping_lines || [];
 
-// Self-collect orders are handled by the dedicated "Self-Collect Order Alert" (routes to the
-// right pickup-point group + tags the IC). Skip GENUINE pickups here so they don't also post a
-// generic (mislabeled "NinjaVan") ping. A pickup line is the Shopify pickup LOCATION name
-// (native local pickup, e.g. "Yash" / "Residential Point 1") or the legacy "Self-Collection -
-// <postal>" rate. Source: Shopify > Settings > Locations, current as of 2026-06-16.
-// Guard: a $0 pickup line can ride alongside a real courier line on $0 first-sub orders — that
-// is a DELIVERY, so DON'T skip it (let it show in the generic feed).
-const PICKUP_NAMES = ['yash', 'residential point 1', 'self-collection - 448908', 'self-collection - 681810'];
+// Pickup-point detection (mirrors Self-Collect Order Alert). A pickup line is the Shopify
+// pickup LOCATION name (native local pickup) or the legacy "Self-Collection - <postal>" rate.
+// Source: Shopify > Settings > Locations, current as of 2026-06-24. Update on rename.
+const PICKUP_POINTS = [
+  {match: ['residential point @ siglap', 'self-collection - 448908', 'yash'], label: 'Siglap', point: 'siglap'},
+  {match: ['residential point @ cck', 'self-collection - 681810', 'residential point 1'], label: 'CCK (Chandani)', point: 'cck'},
+  {match: ['residential point @ stevens', 'self-collection - 259330'], label: 'Stevens (KC)', point: 'stevens'},
+];
 const isPickupLine = s => {
   const hay = (String(s.title || '') + ' ' + String(s.code || '')).toLowerCase();
-  return PICKUP_NAMES.some(n => hay.includes(n)) || /self.?collect/.test(hay);
+  for (const pp of PICKUP_POINTS) { if (pp.match.some(m => hay.includes(m))) return pp; }
+  if (/self.?collect|residential point|pick.?up/.test(hay)) return PICKUP_POINTS[0];
+  return null;
 };
-const hasPickup = shippingLines.some(isPickupLine);
+const scLine = shippingLines.find(isPickupLine);
+// Guard: a $0 pickup line can ride alongside a real courier line on $0 first-sub orders — that
+// is a DELIVERY, not a pickup.
 const hasRealDelivery = shippingLines.some(s => {
   if (isPickupLine(s)) return false;
   const t = (String(s.title || '') + ' ' + String(s.code || '')).toLowerCase();
   return parseFloat(s.price || '0') > 0 || t.includes('ninja') || t.includes('cold chain') ||
          t.includes('lalamove') || t.includes('courier') || t.includes('delivery');
 });
-if (hasPickup && !hasRealDelivery) return [];
+const pickupPoint = (scLine && !hasRealDelivery) ? isPickupLine(scLine) : null;
 
 const shipTitle = String((shippingLines[0] || {}).title || '').toLowerCase();
 let deliveryMethod = 'NinjaVan';
 let deliveryEmoji = '📦';
-if (shipTitle.includes('self-collect') || shipTitle.includes('self collect')) {
-  deliveryMethod = 'Self-collection 🏪';
+if (pickupPoint) {
+  deliveryMethod = `Self-collect · ${pickupPoint.label}`;
   deliveryEmoji = '🏪';
 } else if (shipTitle.includes('cold chain') || shipTitle.includes('cold-chain')) {
   deliveryMethod = 'NinjaVan cold chain';
@@ -105,12 +114,14 @@ function normalizePhone(p) {
   return '';
 }
 
-let fullName = '', phone = '', email = '';
+let fullName = '', phone = '', email = '', lifetimeOrders = 0, lifetimeSpent = 0;
 for (const c of $('Read Customers').all()) {
   if (String(c.json.customer_id || '') === customerId) {
     fullName = `${c.json.first_name || ''} ${c.json.last_name || ''}`.trim();
     phone = normalizePhone(c.json.phone || c.json.default_address_phone || '');
     email = c.json.email || '';
+    lifetimeOrders = Number(String(c.json.total_orders || 0).replace(/,/g, '')) || 0;
+    lifetimeSpent = Number(String(c.json.total_spent || 0).replace(/,/g, '')) || 0;
     break;
   }
 }
@@ -153,19 +164,32 @@ const createdSgt = new Date(body.created_at || Date.now()).toLocaleString('en-SG
 
 const discountLine = visibleDiscount ? `\n🎟️ Code: *${visibleDiscount}*` : '';
 
-const message = `${deliveryEmoji} *New order* ${orderName}${packingAlert}
+// Big-order flag — threshold mirrors Big Order Alert (which still handles the
+// team-WA ping + customer thank-you; it no longer posts to weslee).
+const isBigOrder = parseFloat(total) >= 200;
+const headline = isBigOrder
+  ? `🐳💰 *BIG ORDER* ${orderName}`
+  : `${deliveryEmoji} *New order* ${orderName}`;
+const lifetimeLine = lifetimeOrders > 0
+  ? `\n📊 Lifetime: ${lifetimeOrders} orders · S$${lifetimeSpent.toFixed(2)}` : '';
+const locationLine = pickupPoint ? `📍 Pickup point: ${pickupPoint.label}` : `📍 ${addressLine}`;
+const siglapTag = (pickupPoint || {}).point === 'siglap'
+  ? `\n\n@yashgadodia queue for pickup at the Siglap freezer 📦` : '';
+
+const message = `${headline}${packingAlert}
 
 ${historyTag}
-👤 *${fullName}* · ${phone}${email ? '\n📧 ' + email : ''}
+👤 *${fullName}* · ${phone}${email ? '\n📧 ' + email : ''}${lifetimeLine}
 
 🛒 Items:
         ${items}${discountLine}
 💰 ${currency} $${total}
 
-📅 ${deliveryMethod}
+${deliveryEmoji} ${deliveryMethod}
 📆 ${deliveryDate}
-📍 ${addressLine}
+${locationLine}${siglapTag}
 
+🔗 https://admin.shopify.com/store/d2ac44-d5/orders/${body.id}
 📥 ${createdSgt} SGT`;
 
 return [{
@@ -310,9 +334,9 @@ def main():
   6. Webhook API version: latest
   7. Save
 
-   (the existing Self-Collect Order Alert webhook stays as-is, so self-collect
-    orders will ALSO get the loud ping in the ops thread , per your call to
-    keep both)
+   (the Self-Collect Order Alert + Big Order Alert webhooks stay registered —
+    they still run IC pings/DMs and team WA + thank-you, but no longer post
+    to weslee; this feed is the only weslee order notif)
 
 🧪 Smoke test (without waiting for a real order):
   Send a synthetic Shopify orders/paid payload to the webhook and watch

@@ -10,7 +10,7 @@ import urllib.request
 import urllib.error
 import subprocess
 
-from _notify import telegram_send_node, telegram_launchcycle_node
+from _notify import telegram_launchcycle_node
 from _online_sales import OFFLINE_SOURCES
 from _sent_log import (
     read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
@@ -340,11 +340,8 @@ def build():
         team_wa_node(f"Send Team #{i+1}", [960, 100 + i * 90], p)
         for i, p in enumerate(RECIPIENTS)
     ]
-    telegram_send = telegram_send_node(
-        # This workflow's formatter emits team_msg, not message. Defaulting to
-        # $json.message sent an empty body and Telegram 400'd on every alert.
-        "Send Telegram Weslee", [960, 100 + len(RECIPIENTS) * 90], "={{ $json.team_msg }}"
-    )
+    # Weslee post removed 2026-08-03 — the combined New Order Alert flags big
+    # orders (>= threshold) in the single weslee feed.
     telegram_lc = telegram_launchcycle_node(
         "Send Telegram LaunchCycle", [960, 200 + len(RECIPIENTS) * 90], "={{ $json.team_msg }}"
     )
@@ -418,7 +415,7 @@ def build():
     customer_send = customer_wa_node("Send Customer Thank-You", [1680, 600])
     log_global = append_global_sent_log_node([1920, 600])
 
-    nodes = [trigger, threshold_if, read_sheet, read_global, lookup_format, *team_sends, telegram_send, telegram_lc,
+    nodes = [trigger, threshold_if, read_sheet, read_global, lookup_format, *team_sends, telegram_lc,
              customer_phone_if, not_subscription_if, not_in_cooldown_if, wait_30min, customer_send, log_global]
 
     connections = {
@@ -430,7 +427,7 @@ def build():
         read_sheet["name"]:     {"main": [[{"node": read_global["name"], "type": "main", "index": 0}]]},
         read_global["name"]:    {"main": [[{"node": lookup_format["name"], "type": "main", "index": 0}]]},
         lookup_format["name"]:  {"main": [[
-            *[{"node": n["name"], "type": "main", "index": 0} for n in [*team_sends, telegram_send, telegram_lc]],
+            *[{"node": n["name"], "type": "main", "index": 0} for n in [*team_sends, telegram_lc]],
             {"node": customer_phone_if["name"], "type": "main", "index": 0},
         ]]},
         customer_phone_if["name"]: {"main": [
