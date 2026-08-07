@@ -28,6 +28,7 @@ WMS_PAT = subprocess.check_output(
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 WF_NAME = "Self-Collect Order Alert - Telegram"
 WEBHOOK_PATH = "selfcollect-order-alert-9b3e1f7c2d"
+CANCEL_WEBHOOK_PATH = "selfcollect-cancel-alert-5c7d2e9a4f"
 
 TELEGRAM_CHAT_ID = "-1002184573790"          # Team Bon Pet supergroup (main thread)
 TELEGRAM_WESLEE_THREAD_ID = 34253            # weslee thread (was "2" / ops thread until 2026-05-16)
@@ -251,20 +252,133 @@ jobs.push({ chat_id: LAUNCHCYCLE_CHAT,
 
 return jobs.map(j => ({ json: Object.assign({ is_self_collect: true, order_name: orderName, pickup_point: point }, j) }));
 """
-FORMAT_JS = (FORMAT_JS
-    .replace("__IS_ONLINE_JS__", IS_ONLINE_JS)
-    .replace("__PICKUP_POINTS__", json.dumps(PICKUP_POINTS))
-    .replace("__MAIN_CHAT__", TELEGRAM_CHAT_ID)
-    .replace("__MAIN_THREAD__", str(TELEGRAM_WESLEE_THREAD_ID))
-    .replace("__CHANDANI_CHAT__", CHANDANI_CHAT_ID)
-    .replace("__CHANDANI_USERNAME__", CHANDANI_USERNAME)
-    .replace("__CHANDANI_DM__", str(CHANDANI_DM_ID) if CHANDANI_DM_ID else "null")
-    .replace("__KC_CHAT__", KC_CHAT_ID)
-    .replace("__KC_USERNAME__", KC_USERNAME)
-    .replace("__KC_DM__", str(KC_DM_ID) if KC_DM_ID else "null")
-    .replace("__YASH_USERNAME__", YASH_USERNAME)
-    .replace("__YASH_DM__", str(YASH_DM_ID) if YASH_DM_ID else "null")
-    .replace("__LC_CHAT__", LAUNCHCYCLE_CHAT_ID))
+# The cancel branch. Shopify sends the full order object on orders/cancelled, so the same
+# pickup-point detection works. It lives in THIS workflow, not the Refund & Cancel Alert one,
+# so the "pack it" DM and its retraction always resolve to the same chat IDs.
+CANCEL_JS = r"""// Parse orders/cancelled, detect self-collect + pickup point, retract the pack instruction.
+const p = $('Shopify Webhook (orders/cancelled)').first().json;
+const body = p.body || p;
+
+__IS_ONLINE_JS__
+// Online sales only, matching the paid path - a POS sale was handed over on the spot.
+if (!isOnlineOrder(body)) return [];
+
+const shippingLines = body.shipping_lines || [];
+
+const PICKUP_POINTS = __PICKUP_POINTS__;
+const pickupFor = s => {
+  const hay = (String(s.title || '') + ' ' + String(s.code || '')).toLowerCase();
+  for (const p of PICKUP_POINTS) { if (p.match.some(m => hay.includes(m))) return p; }
+  if (/self.?collect|residential point|pick.?up/.test(hay)) return { point: 'siglap', postal: '448908' };
+  return null;
+};
+const scLine = shippingLines.find(pickupFor);
+const scPoint = scLine ? pickupFor(scLine) : null;
+
+// Same phantom-pickup-line guard as the paid path: a $0 pickup line riding alongside a real
+// courier line means this was a DELIVERY, so no pack instruction was ever sent to retract.
+const hasRealDelivery = shippingLines.some(s => {
+  if (pickupFor(s)) return false;
+  const t = (String(s.title || '') + ' ' + String(s.code || '')).toLowerCase();
+  const priced = parseFloat(s.price || '0') > 0;
+  return priced || t.includes('ninja') || t.includes('cold chain') ||
+         t.includes('lalamove') || t.includes('courier') || t.includes('delivery');
+});
+
+if (!scLine || hasRealDelivery) {
+  return [{ json: { is_self_collect: false,
+    skip_reason: !scLine ? 'not a self-collect order' : 'delivery order with phantom self-collect line' } }];
+}
+
+const point = scPoint.point;
+const orderName = body.name || `#${body.order_number || body.id}`;
+const reason = body.cancel_reason || '';
+
+function shortTime(iso) {
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Singapore',
+      weekday: 'short', day: '2-digit', month: 'short',
+      hour: '2-digit', minute: '2-digit', hour12: false
+    }).format(new Date(iso));
+  } catch { return iso; }
+}
+const cancelledAt = shortTime(body.cancelled_at || body.updated_at || new Date().toISOString());
+
+const items = (body.line_items || []).slice(0, 6).map(li => {
+  const v = li.variant_title && li.variant_title !== 'Default Title' ? ` - ${li.variant_title}` : '';
+  return `• ${li.quantity || 0}x ${li.title || li.name || 'Unknown'}${v}`;
+}).join('\n') || '_(no items captured)_';
+
+const reasonLine = reason ? `\n📝 Reason: ${reason}` : '';
+const summary = `🚫 Cancelled ${cancelledAt} SGT${reasonLine}
+
+🛒 Was:
+${items}
+
+If it is already packed, please return the packs to the freezer.`;
+
+const CHANDANI_CHAT = '__CHANDANI_CHAT__';
+const CHANDANI_USERNAME = '__CHANDANI_USERNAME__';
+const CHANDANI_DM = __CHANDANI_DM__;
+const KC_CHAT = '__KC_CHAT__';
+const KC_USERNAME = '__KC_USERNAME__';
+const KC_DM = __KC_DM__;
+const YASH_DM = __YASH_DM__;
+const LAUNCHCYCLE_CHAT = '__LC_CHAT__';
+
+// Mirror the paid path exactly: whoever was told to pack it gets told to stop.
+const jobs = [];
+if (point === 'cck') {
+  const tag = CHANDANI_USERNAME ? `@${CHANDANI_USERNAME}` : 'Chandani';
+  jobs.push({ chat_id: CHANDANI_CHAT,
+    text: `❌ *CANCELLED - do not pack · CCK* ${orderName}\n\n${summary}\n\n${tag} this one is off, no need to queue it.` });
+  if (CHANDANI_DM) {
+    jobs.push({ chat_id: CHANDANI_DM,
+      text: `❌ *CANCELLED - DO NOT PACK* ${orderName}\n\n${summary}` });
+  }
+} else if (point === 'stevens') {
+  const tag = KC_USERNAME ? `@${KC_USERNAME}` : 'team';
+  jobs.push({ chat_id: KC_CHAT,
+    text: `❌ *CANCELLED - do not pack · Stevens* ${orderName}\n\n${summary}\n\n${tag} this one is off, no need to queue it.` });
+  if (KC_DM) {
+    jobs.push({ chat_id: KC_DM,
+      text: `❌ *CANCELLED - DO NOT PACK* ${orderName}\n\n${summary}` });
+  }
+} else {
+  if (YASH_DM) {
+    jobs.push({ chat_id: YASH_DM,
+      text: `❌ *CANCELLED - DO NOT PACK* ${orderName}\n\n${summary}` });
+  }
+}
+
+const lcLabel = point === 'cck' ? 'CCK' : point === 'stevens' ? 'Stevens' : 'Siglap';
+jobs.push({ chat_id: LAUNCHCYCLE_CHAT,
+  text: `❌ *Self-collect order cancelled · ${lcLabel}* ${orderName}\n\n${summary}` });
+
+return jobs.map(j => ({ json: Object.assign({ is_self_collect: true, order_name: orderName, pickup_point: point }, j) }));
+"""
+
+
+def fill(js):
+    return (js
+        .replace("__IS_ONLINE_JS__", IS_ONLINE_JS)
+        .replace("__PICKUP_POINTS__", json.dumps(PICKUP_POINTS))
+        .replace("__MAIN_CHAT__", TELEGRAM_CHAT_ID)
+        .replace("__MAIN_THREAD__", str(TELEGRAM_WESLEE_THREAD_ID))
+        .replace("__CHANDANI_CHAT__", CHANDANI_CHAT_ID)
+        .replace("__CHANDANI_USERNAME__", CHANDANI_USERNAME)
+        .replace("__CHANDANI_DM__", str(CHANDANI_DM_ID) if CHANDANI_DM_ID else "null")
+        .replace("__KC_CHAT__", KC_CHAT_ID)
+        .replace("__KC_USERNAME__", KC_USERNAME)
+        .replace("__KC_DM__", str(KC_DM_ID) if KC_DM_ID else "null")
+        .replace("__YASH_USERNAME__", YASH_USERNAME)
+        .replace("__YASH_DM__", str(YASH_DM_ID) if YASH_DM_ID else "null")
+        .replace("__LC_CHAT__", LAUNCHCYCLE_CHAT_ID))
+
+
+FORMAT_JS = fill(FORMAT_JS)
+CANCEL_JS = fill(CANCEL_JS)
 
 
 def uid(): return str(uuid.uuid4())
@@ -391,12 +505,34 @@ send_telegram = {
     "onError": "continueRegularOutput",
 }
 
-nodes = [webhook, read_customers, fetch_oms_order, format_code, is_selfcollect_if, send_telegram]
+cancel_webhook = {
+    "parameters": {
+        "httpMethod": "POST", "path": CANCEL_WEBHOOK_PATH,
+        "responseMode": "onReceived", "options": {"rawBody": False},
+    },
+    "id": uid(), "name": "Shopify Webhook (orders/cancelled)",
+    "type": "n8n-nodes-base.webhook", "typeVersion": 2,
+    "position": [0, 620], "webhookId": CANCEL_WEBHOOK_PATH,
+}
+
+# No customer enrichment on this path: the IC only needs the order number to match the
+# cancellation against the pack DM they already got.
+format_cancel = {
+    "parameters": {"jsCode": CANCEL_JS},
+    "id": uid(), "name": "Format Cancel",
+    "type": "n8n-nodes-base.code", "typeVersion": 2,
+    "position": [720, 620],
+}
+
+nodes = [webhook, read_customers, fetch_oms_order, format_code, is_selfcollect_if, send_telegram,
+         cancel_webhook, format_cancel]
 connections = {
     webhook["name"]:           {"main": [[{"node": read_customers["name"], "type": "main", "index": 0}]]},
     read_customers["name"]:    {"main": [[{"node": fetch_oms_order["name"], "type": "main", "index": 0}]]},
     fetch_oms_order["name"]:   {"main": [[{"node": format_code["name"], "type": "main", "index": 0}]]},
     format_code["name"]:       {"main": [[{"node": is_selfcollect_if["name"], "type": "main", "index": 0}]]},
+    cancel_webhook["name"]:    {"main": [[{"node": format_cancel["name"], "type": "main", "index": 0}]]},
+    format_cancel["name"]:     {"main": [[{"node": is_selfcollect_if["name"], "type": "main", "index": 0}]]},
     is_selfcollect_if["name"]: {"main": [
         [{"node": send_telegram["name"], "type": "main", "index": 0}],
         [],
