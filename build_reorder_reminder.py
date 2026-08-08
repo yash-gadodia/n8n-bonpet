@@ -168,20 +168,20 @@ for (const [cid, cust_orders] of byCustomer) {
   const customerMsg = reminderNum === 1
     ? `Hey ${firstName}! 👋\n\n` +
       `Your furkid is probably running low on Bon Pet right about now 🐾\n` +
-      `Your last order was ${daysSince} days ago — perfect time to restock so they don't miss a meal ❤️\n\n` +
+      `Your last order was ${daysSince} days ago, perfect time to restock so they don't miss a meal ❤️\n\n` +
       `🛒 *One-tap reorder:* ${cartLink}\n\n` +
       `💡 *Switch to Subscribe & Save* and never run out again:\n` +
-      `✅ 30% off your first subscription order — code *FIRSTORDER<3THEBONPET*\n` +
+      `✅ 30% off your first subscription order with code *FIRSTORDER<3THEBONPET*\n` +
       `✅ 10% off every order after\n` +
-      `✅ Free delivery over $100\n` +
-      `✅ Choose 1–6 week cadence, pause/cancel anytime\n\n` +
+      `✅ Free delivery above $150, $4 above $80\n` +
+      `✅ Choose 1 to 6 week cadence, pause/cancel anytime\n\n` +
       `As always, reply here if you have any questions 🙂\n\n` +
       `❤️ The Bon Pet Team`
     : `Hey ${firstName}! 👋\n\n` +
-      `Just checking in — wanted to make sure your furkid doesn't run out of Bon Pet 🐾\n` +
+      `Just checking in, wanted to make sure your furkid doesn't run out of Bon Pet 🐾\n` +
       `It's been ${daysSince} days since your last order. If you'd like, here's a one-tap reorder:\n\n` +
       `🛒 ${cartLink}\n\n` +
-      `*Subscribe & Save tip 💡* — get 30% off your first subscription order with *FIRSTORDER<3THEBONPET*, then 10% off every order after that, with free delivery over $100. Cancel anytime.\n\n` +
+      `*Subscribe & Save tip 💡*: get 30% off your first subscription order with *FIRSTORDER<3THEBONPET*, then 10% off every order after that, plus free delivery above $150. Cancel anytime.\n\n` +
       `Anything we can help with? Just reply here ❤️\n\n` +
       `The Bon Pet Team`;
 
