@@ -42,3 +42,6 @@ refactor_to_keychain.py
 
 # Live workflow snapshots (contain resolved WA API key in HTTP node headers)
 snapshots/
+
+# Workflow snapshots: contain live jsCode with embedded API keys. NEVER commit.
+snapshots/
