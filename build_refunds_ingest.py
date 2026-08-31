@@ -6,6 +6,7 @@
 Webhook URL for Shopify config: https://n8n.thebonpet.com/webhook/shopify-refunds-ingest
 """
 import json, uuid, os, urllib.request, urllib.error, time
+from _deploy_guard import preflight
 
 KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
 API = "https://n8n.thebonpet.com/api/v1"
@@ -170,6 +171,7 @@ def build_refunds_ingest():
     payload = {"name": "Refunds Ingest (Shopify → DB)", "nodes": nodes,
                "connections": conn, "settings": {"executionOrder": "v1"}}
     if wf_id:
+        preflight(wf_id, payload)
         s, b = http("PUT", f"/workflows/{wf_id}", payload)
         print(f"  Refunds Ingest WF updated: {wf_id} (HTTP {s})")
     else:

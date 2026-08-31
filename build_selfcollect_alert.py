@@ -17,6 +17,7 @@ Customer PII (name+phone) is pulled from the Customer Orders DB Google Sheet
 import json, uuid, os, subprocess, urllib.request, urllib.error
 
 from _online_sales import IS_ONLINE_JS
+from _deploy_guard import preflight
 
 API = "https://n8n.thebonpet.com/api/v1"
 
@@ -31,6 +32,9 @@ WEBHOOK_PATH = "selfcollect-order-alert-9b3e1f7c2d"
 CANCEL_WEBHOOK_PATH = "selfcollect-cancel-alert-5c7d2e9a4f"
 
 TELEGRAM_CHAT_ID = "-1002184573790"          # Team Bon Pet supergroup (main thread)
+# LIVE-ONLY node not in this builder: 'Telegram DM Chandani' (chat_id 579742150, CS) cloned off the
+# Telegram send node on 2026-08-31 via scratch dm_chandani.py. Re-add it if you rebuild from here.
+
 TELEGRAM_WESLEE_THREAD_ID = 34253            # weslee thread (was "2" / ops thread until 2026-05-16)
 TELEGRAM_TOKEN = open(os.path.expanduser("~/.telegram-weslee-bot-token")).read().strip()
 
@@ -597,6 +601,7 @@ if __name__ == "__main__":
 
     existing_id = find_existing()
     if existing_id:
+        preflight(existing_id, payload)
         status, body = http("PUT", f"/workflows/{existing_id}", payload)
         new_id = existing_id
         print(f"PUT existing {new_id} → HTTP {status}")

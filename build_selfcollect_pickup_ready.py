@@ -18,6 +18,7 @@ bot token in `telegram-weslee-bot`. All read at build time and embedded into
 the workflow JSON (matches pattern from build_reorder_reminder_v2.py).
 """
 import json, os, subprocess, urllib.request, urllib.error, uuid
+from _deploy_guard import preflight
 
 API = "https://n8n.thebonpet.com/api/v1"
 KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
@@ -718,6 +719,7 @@ def main():
 
     if existing:
         wf_id = existing["id"]
+        preflight(wf_id, wf)
         status, body = n8n("PUT", f"/workflows/{wf_id}", wf)
         print(f"🔁 PUT /workflows/{wf_id} → {status}")
     else:

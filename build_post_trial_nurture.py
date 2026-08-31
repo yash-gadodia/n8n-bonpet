@@ -22,6 +22,7 @@ from _sent_log import (
     read_global_sent_log_node, append_global_sent_log_node, COOLDOWN_JS_SNIPPET,
 )
 from _blacklist import BLACKLIST_JS_SNIPPET
+from _deploy_guard import preflight
 
 KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
 API = "https://n8n.thebonpet.com/api/v1"
@@ -47,6 +48,7 @@ TEAM_PHONES = [
     "+6590108515",  # Bon Pet official
     "+6587993341",  # Rachel
     "+6282240119788",  # Bari
+    "+6596574614",  # Chandani (CS)
 ]
 
 # Trial pack SKU handles (from CLAUDE.md)
@@ -561,6 +563,7 @@ if __name__ == "__main__":
     if WF_ID and WF_ID != "None":
         # Update existing workflow
         print(f"Updating existing workflow {WF_ID}...")
+        preflight(WF_ID, payload)
         status, body = http("PUT", f"/workflows/{WF_ID}", payload)
         print(f"PUT /workflows/{WF_ID} → HTTP {status}")
         wf_id = WF_ID

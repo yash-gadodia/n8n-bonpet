@@ -14,6 +14,7 @@ from _sent_log import (
     append_global_sent_log_node,
 )
 from _blacklist import BLACKLIST_JS_SNIPPET
+from _deploy_guard import preflight
 
 KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
 API = "https://n8n.thebonpet.com/api/v1"
@@ -594,6 +595,7 @@ payload = {
 }
 
 if __name__ == "__main__":
+    preflight(WF_ID, payload)
     status, body = http("PUT", f"/workflows/{WF_ID}", payload)
     print(f"PUT → HTTP {status}")
     print(body[:300])

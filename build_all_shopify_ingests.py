@@ -10,6 +10,7 @@ Designed so future automations can just read from the sheet without touching Sho
 Idempotent: re-run safely; existing tabs/workflows are updated, not duplicated.
 """
 import json, uuid, os, urllib.request, urllib.error, time
+from _deploy_guard import preflight
 
 KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
 API = "https://n8n.thebonpet.com/api/v1"
@@ -262,6 +263,7 @@ def build_ingest(spec):
     existing = json.loads(http("GET", "/workflows")[1]).get("data", [])
     wf_id = next((w["id"] for w in existing if w["name"] == spec["wf_name"]), None)
     if wf_id:
+        preflight(wf_id, payload)
         s, b = http("PUT", f"/workflows/{wf_id}", payload)
         print(f"  [{spec['name']}] WF updated: {wf_id} (HTTP {s})")
     else:

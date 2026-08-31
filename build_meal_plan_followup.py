@@ -40,6 +40,7 @@ from _sent_log import (
     native_filter_recent_sent_log_node,
 )
 from _blacklist import BLACKLIST_JS_SNIPPET
+from _deploy_guard import preflight
 
 KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
 API = "https://n8n.thebonpet.com/api/v1"
@@ -83,7 +84,7 @@ const DAILY_CAP = 40;
 // message Nic, Rachel and the rest, who all ran the planner to test it.
 const TEAM_PHONES = new Set([
   '+6581394225', '+6598531677', '+6590108515', '+6587993341',
-  '+6581114800', '+6282240119788',
+  '+6581114800', '+6282240119788', '+6596574614',
 ]);
 
 function normalizePhone(p) {
@@ -482,6 +483,7 @@ payload = {
 
 if __name__ == "__main__":
     if WF_ID:
+        preflight(WF_ID, payload)
         status, body = http("PUT", f"/workflows/{WF_ID}", payload)
         print(f"PUT /workflows/{WF_ID} → HTTP {status}")
         wf_id = WF_ID

@@ -25,6 +25,7 @@ RECIPIENTS = [
     "+6590108515",  # Bon Pet official
     "+6587993341",  # Rachel
     "+6282240119788",  # Bari (CS agent, ID)
+    "+6596574614",  # Chandani (CS)
     "+6583513308",  # Siva (Launch Cycle agency - external)
     "+6588146498",  # Raghav (Launch Cycle agency - external)
 ]

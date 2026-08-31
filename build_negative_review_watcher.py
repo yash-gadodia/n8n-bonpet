@@ -21,6 +21,7 @@ import urllib.error
 
 from _notify import telegram_send_node
 import subprocess
+from _deploy_guard import preflight
 
 API = "https://n8n.thebonpet.com/api/v1"
 WF_NAME = "Negative Review Watcher - WhatsApp"
@@ -323,6 +324,7 @@ if __name__ == "__main__":
 
     existing_id = find_existing()
     if existing_id:
+        preflight(existing_id, payload)
         status, body = http("PUT", f"/workflows/{existing_id}", payload)
         new_id = existing_id
         print(f"PUT existing {new_id} → HTTP {status}")

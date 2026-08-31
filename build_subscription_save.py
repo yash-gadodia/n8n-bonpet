@@ -24,6 +24,7 @@ from _sent_log import (
 )
 from _notify import telegram_send_node
 import subprocess
+from _deploy_guard import preflight
 
 API = "https://n8n.thebonpet.com/api/v1"
 WF_NAME = "Subscription Save - WhatsApp"
@@ -46,6 +47,7 @@ TEAM_RECIPIENTS = [
     ("Bon Pet official", "+6590108515"),
     ("Rachel",           "+6587993341"),
     ("Bari",             "+6282240119788"),
+    ("Chandani",         "+6596574614"),
 ]
 
 
@@ -408,6 +410,7 @@ if __name__ == "__main__":
 
     existing_id = find_existing()
     if existing_id:
+        preflight(existing_id, payload)
         status, body = http("PUT", f"/workflows/{existing_id}", payload)
         new_id = existing_id
         print(f"PUT existing {new_id} → HTTP {status}")

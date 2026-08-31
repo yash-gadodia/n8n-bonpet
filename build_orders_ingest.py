@@ -5,6 +5,7 @@ Receives POSTs from Shopify Flow ("Order paid" trigger) and appends each order
 (with PII) to the 'Bon Pet — Customer Orders DB' sheet's `orders` tab.
 """
 import json, uuid, os, urllib.request, urllib.error
+from _deploy_guard import preflight
 
 KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
 API = "https://n8n.thebonpet.com/api/v1"
@@ -207,6 +208,7 @@ if existing_match:
         "connections": connections,
         "settings": {"executionOrder": "v1"},
     }
+    preflight(wf_id, payload)
     status, body = http("PUT", f"/workflows/{wf_id}", payload)
     print(f"Updated existing  WF_ID = {wf_id}  → HTTP {status}")
 else:

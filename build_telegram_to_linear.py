@@ -14,6 +14,7 @@ import subprocess
 import urllib.request
 import urllib.error
 import uuid
+from _deploy_guard import preflight
 
 API = "https://n8n.thebonpet.com/api/v1"
 KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
@@ -1478,6 +1479,7 @@ def deploy():
     payload = build()
     existing = find_existing()
     if existing:
+        preflight(existing, payload)
         s, body = n8n("PUT", f"/workflows/{existing}", payload)
         wf_id = existing
         print(f"PUT existing {wf_id} → {s}")

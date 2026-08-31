@@ -18,6 +18,7 @@ from _notify import telegram_send_node, telegram_launchcycle_node
 from _sent_log import read_global_sent_log_node, native_filter_recent_sent_log_node
 from _online_sales import IS_ONLINE_JS
 import subprocess
+from _deploy_guard import preflight
 
 API = "https://n8n.thebonpet.com/api/v1"
 WF_NAME = "Morning Briefing - WhatsApp"
@@ -38,6 +39,7 @@ RECIPIENTS = [
     "+6590108515",  # Bon Pet official
     "+6587993341",  # Rachel
     "+6282240119788",  # Bari (CS agent, ID)
+    "+6596574614",  # Chandani (CS)
     "+6583513308",  # Siva (Launch Cycle agency - external)
     "+6588146498",  # Raghav (Launch Cycle agency - external)
 ]
@@ -894,6 +896,7 @@ if __name__ == "__main__":
 
     existing_id = find_existing()
     if existing_id:
+        preflight(existing_id, payload)
         status, body = http("PUT", f"/workflows/{existing_id}", payload)
         new_id = existing_id
         print(f"PUT existing {new_id} → HTTP {status}")

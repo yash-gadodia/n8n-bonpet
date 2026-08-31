@@ -6,6 +6,7 @@ Flip DRY_RUN to false in the Code node and re-PUT to go live to customers.
 """
 import json, uuid, os, urllib.request, urllib.error
 import subprocess
+from _deploy_guard import preflight
 
 WF_ID = "AMd0mktMWn73UCbZ"
 TEAM_PROJECT_ID = "i1GSXBntwNvNqic8"  # The Bon Pet team project — shared creds live here
@@ -382,6 +383,7 @@ if __name__ == "__main__":
     with open("/Users/yash/n8n-bonpet/reorder_payload.json", "w") as f:
         json.dump(payload, f, indent=2)
     print(f"Built: {len(payload['nodes'])} nodes  WF_ID={WF_ID}")
+    preflight(WF_ID, payload)
     status, body = api_request("PUT", f"/workflows/{WF_ID}", payload)
     print(f"PUT HTTP {status}")
     print(body[:300])

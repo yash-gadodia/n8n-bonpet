@@ -15,6 +15,7 @@ from _sent_log import (
 from _blacklist import BLACKLIST_JS_SNIPPET
 from _notify import telegram_send_node, telegram_launchcycle_node
 import subprocess
+from _deploy_guard import preflight
 
 API = "https://n8n.thebonpet.com/api/v1"
 WF_NAME = "Win-back - WhatsApp"
@@ -51,6 +52,7 @@ TEAM_RECIPIENTS = [
     ("Bon Pet official", "+6590108515"),
     ("Rachel",           "+6587993341"),
     ("Bari",             "+6282240119788"),
+    ("Chandani",         "+6596574614"),
     ("Siva",             "+6583513308"),    # Launch Cycle agency - external
     ("Raghav",           "+6588146498"),    # Launch Cycle agency - external
 ]
@@ -564,6 +566,7 @@ if __name__ == "__main__":
 
     existing_id = find_existing()
     if existing_id:
+        preflight(existing_id, payload)
         status, body = http("PUT", f"/workflows/{existing_id}", payload)
         new_id = existing_id
         print(f"PUT existing {new_id} → HTTP {status}")

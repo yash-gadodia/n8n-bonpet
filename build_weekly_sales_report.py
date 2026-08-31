@@ -39,6 +39,7 @@ import urllib.request
 import uuid
 
 from _online_sales import IS_ONLINE_JS
+from _deploy_guard import preflight
 
 API = "https://n8n.thebonpet.com/api/v1"
 WF_NAME = "Weekly & Monthly Sales Report - WhatsApp"
@@ -68,6 +69,7 @@ RECIPIENTS = [
     ("Send WhatsApp #3", "+6590108515",    [1760, 288]),   # Bon Pet official
     ("Send WhatsApp #4", "+6587993341",    [1648, 608]),   # Rachel
     ("Send WhatsApp #6", "+6282240119788", [1648, 808]),   # Bari (CS agent, ID)
+    ("Send WhatsApp #7", "+6596574614", [1648, 908]),   # Chandani (CS)
 ]
 
 SHOPIFY_PAGINATION = {
@@ -379,6 +381,7 @@ def build():
 
 if __name__ == "__main__":
     payload = build()
+    preflight(WF_ID, payload)
     status, body = http("PUT", f"/workflows/{WF_ID}", payload)
     print(f"PUT {WF_ID} -> HTTP {status} ({len(payload['nodes'])} nodes)")
     if status >= 300:

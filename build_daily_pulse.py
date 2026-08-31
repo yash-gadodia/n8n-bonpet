@@ -12,6 +12,7 @@ import urllib.request
 from _notify import telegram_send_node
 import urllib.error
 import subprocess
+from _deploy_guard import preflight
 
 API = "https://n8n.thebonpet.com/api/v1"
 WF_NAME = "Daily Pulse - WhatsApp"
@@ -429,6 +430,7 @@ if __name__ == "__main__":
     existing_id = find_existing()
     if existing_id:
         print(f"Found existing workflow {existing_id} — updating (PUT)")
+        preflight(existing_id, payload)
         status, body = http("PUT", f"/workflows/{existing_id}", payload)
         new_id = existing_id
     else:

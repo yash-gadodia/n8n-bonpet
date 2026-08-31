@@ -45,3 +45,6 @@ snapshots/
 
 # Workflow snapshots: contain live jsCode with embedded API keys. NEVER commit.
 snapshots/
+
+# Deploy guard fingerprints + pre-deploy backups (contain resolved secrets)
+.snapshots/

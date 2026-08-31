@@ -24,12 +24,16 @@ Pipeline: webhook → Read Customers (enrich) → Format → Telegram.
 import json, uuid, os, urllib.request, urllib.error
 
 from _online_sales import IS_ONLINE_JS
+from _deploy_guard import preflight
 
 API = "https://n8n.thebonpet.com/api/v1"
 WF_NAME = "New Order Alert (all orders) → weslee thread"
 WEBHOOK_PATH = "new-order-alert-7b2e4f8a1c"
 
 TELEGRAM_CHAT_ID = "-1002184573790"          # Team Bon Pet supergroup
+# LIVE-ONLY node not in this builder: 'Telegram DM Chandani' (chat_id 579742150, CS) cloned off the
+# Telegram send node on 2026-08-31 via scratch dm_chandani.py. Re-add it if you rebuild from here.
+
 TELEGRAM_THREAD_ID = "34253"                 # weslee thread
 TELEGRAM_TOKEN = open(os.path.expanduser("~/.telegram-weslee-bot-token")).read().strip()
 
@@ -311,6 +315,7 @@ def main():
 
     if existing:
         wf_id = existing["id"]
+        preflight(wf_id, wf)
         s2, _ = http("PUT", f"/workflows/{wf_id}", wf)
         print(f"🔁 PUT /workflows/{wf_id} → {s2}")
     else:

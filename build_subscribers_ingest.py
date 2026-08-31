@@ -8,6 +8,7 @@
      subscription_contracts/create and subscription_contracts/update events
 """
 import csv, json, uuid, os, urllib.request, urllib.error, time
+from _deploy_guard import preflight
 
 KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
 API = "https://n8n.thebonpet.com/api/v1"
@@ -155,6 +156,7 @@ def build_ingest():
     existing = json.loads(http("GET", "/workflows?limit=100")[1]).get("data", [])
     wf_id = next((w["id"] for w in existing if w["name"] == "Subscribers Ingest (Shopify → DB)"), None)
     if wf_id:
+        preflight(wf_id, payload)
         s, _ = http("PUT", f"/workflows/{wf_id}", payload)
         print(f"  WF updated: {wf_id} (HTTP {s})")
     else:

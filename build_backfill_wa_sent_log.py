@@ -30,6 +30,7 @@ import json
 import os
 import urllib.request
 import uuid
+from _deploy_guard import preflight
 
 KEY = open(os.path.expanduser("~/.n8n-bonpet-newkey")).read().strip()
 API = "https://n8n.thebonpet.com/api/v1"
@@ -168,6 +169,7 @@ if __name__ == "__main__":
     import sys
     existing_id = sys.argv[1] if len(sys.argv) > 1 else None
     if existing_id:
+        preflight(existing_id, workflow)
         wf = req("PUT", f"/workflows/{existing_id}", workflow)
         print(f"updated workflow {wf['id']}")
     else:
