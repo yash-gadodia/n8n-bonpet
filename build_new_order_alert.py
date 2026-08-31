@@ -60,11 +60,12 @@ const shippingLines = body.shipping_lines || [];
 
 // Pickup-point detection (mirrors Self-Collect Order Alert). A pickup line is the Shopify
 // pickup LOCATION name (native local pickup) or the legacy "Self-Collection - <postal>" rate.
-// Source: Shopify > Settings > Locations, current as of 2026-06-24. Update on rename.
+// Source: Shopify > Settings > Locations, current as of 2026-08-31. Update on rename.
 const PICKUP_POINTS = [
   {match: ['residential point @ siglap', 'self-collection - 448908', 'yash'], label: 'Siglap', point: 'siglap'},
   {match: ['residential point @ cck', 'self-collection - 681810', 'residential point 1'], label: 'CCK (Chandani)', point: 'cck'},
   {match: ['residential point @ stevens', 'self-collection - 259330'], label: 'Stevens (KC)', point: 'stevens'},
+  {match: ['residential point @ bukit panjang', 'self-collection - 670120'], label: 'Bukit Panjang (Shanna)', point: 'bukit'},
 ];
 const isPickupLine = s => {
   const hay = (String(s.title || '') + ' ' + String(s.code || '')).toLowerCase();

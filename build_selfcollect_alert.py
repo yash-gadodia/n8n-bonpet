@@ -41,11 +41,13 @@ TELEGRAM_TOKEN = open(os.path.expanduser("~/.telegram-weslee-bot-token")).read()
 #   Siglap (Yash)            → location "Residential Point @ Siglap"  (older: "Yash" / "Self-Collection - 448908")
 #   Choa Chu Kang (Chandani) → location "Residential Point @ CCK"     (older: "Residential Point 1" / "Self-Collection - 681810")
 #   Stevens (KC / Ewe Boon)  → location "Residential Point @ Stevens" (legacy: "Self-Collection - 259330")
+#   Bukit Panjang (Shanna)   → location "Residential Point @ Bukit Panjang" (added 2026-08-31)
 # Source: Shopify > Settings > Locations, current as of 2026-06-24. Update on rename.
 PICKUP_POINTS = [
     {"match": ["residential point @ siglap", "self-collection - 448908", "yash"], "point": "siglap", "postal": "448908"},
     {"match": ["residential point @ cck", "self-collection - 681810", "residential point 1"], "point": "cck", "postal": "681810"},
     {"match": ["residential point @ stevens", "self-collection - 259330"], "point": "stevens", "postal": "259330"},
+    {"match": ["residential point @ bukit panjang", "self-collection - 670120"], "point": "bukit", "postal": "670120"},
 ]
 
 # Siglap (Yash)
@@ -61,6 +63,11 @@ CHANDANI_DM_ID = 579742150                   # Chandani's private chat with @wes
 KC_CHAT_ID = "-5544333294"                   # "KC X The Bon Pet Pickup Point" group
 KC_USERNAME = "kaseyketo"                    # @-tag in the group (Kasey)
 KC_DM_ID = 8936228589                        # Kc Ong's private chat with @weslee_bot
+
+# Bukit Panjang (Shanna / Pending Road)
+SHANNA_CHAT_ID = "-5319907131"               # "shanna X the bon pet self collection" group
+SHANNA_USERNAME = "rainbowprickles"          # @-tag in her group
+SHANNA_DM_ID = None                          # set once Shanna sends /start to @weslee_bot
 
 # Launch Cycle (external advisory agency) - visibility copy of every self-collect order
 LAUNCHCYCLE_CHAT_ID = "-5177312185"          # "Launch Cycle X The Bon Pet" group
@@ -111,7 +118,7 @@ if (!scLine || hasRealDelivery) {
     skip_reason: !scLine ? 'not a self-collect order' : 'delivery order with phantom self-collect line' } }];
 }
 
-const point = scPoint.point; // 'siglap' | 'cck' | 'stevens'
+const point = scPoint.point; // 'siglap' | 'cck' | 'stevens' | 'bukit'
 
 const orderName = body.name || `#${body.order_number || body.id}`;
 const total = body.total_price || '0.00';
@@ -210,6 +217,9 @@ const KC_USERNAME = '__KC_USERNAME__';
 const KC_DM = __KC_DM__;
 const YASH_USERNAME = '__YASH_USERNAME__';
 const YASH_DM = __YASH_DM__;
+const SHANNA_CHAT = '__SHANNA_CHAT__';
+const SHANNA_USERNAME = '__SHANNA_USERNAME__';
+const SHANNA_DM = __SHANNA_DM__;
 const LAUNCHCYCLE_CHAT = '__LC_CHAT__';
 
 // Weslee main-thread posts removed 2026-08-03 — the combined New Order Alert is now the
@@ -236,6 +246,16 @@ if (point === 'cck') {
     jobs.push({ chat_id: KC_DM,
       text: `📦 *New Stevens self-collect order to pack* ${orderName}\n\n${summary}` });
   }
+} else if (point === 'bukit') {
+  const tag = SHANNA_USERNAME ? `@${SHANNA_USERNAME}` : 'Shanna';
+  // 1) Shanna's group, actionable + tagged
+  jobs.push({ chat_id: SHANNA_CHAT,
+    text: `🏪 *Self-collect order · Bukit Panjang* ${orderName}\n\n${summary}\n\n${tag} heads up, please queue this for pickup at the Bukit Panjang point. 📦` });
+  // 2) DM Shanna to pack (only once she has registered with the bot)
+  if (SHANNA_DM) {
+    jobs.push({ chat_id: SHANNA_DM,
+      text: `📦 *New Bukit Panjang self-collect order to pack* ${orderName}\n\n${summary}` });
+  }
 } else {
   // Siglap (448908 / legacy bare "Self-Collection") - also the default for any unknown pickup
   // DM Yash to pack (weslee tag comes from the combined New Order Alert)
@@ -246,7 +266,7 @@ if (point === 'cck') {
 }
 
 // Launch Cycle (external agency) - visibility copy for every self-collect order
-const lcLabel = point === 'cck' ? 'CCK' : point === 'stevens' ? 'Stevens' : 'Siglap';
+const lcLabel = point === 'cck' ? 'CCK' : point === 'stevens' ? 'Stevens' : point === 'bukit' ? 'Bukit Panjang' : 'Siglap';
 jobs.push({ chat_id: LAUNCHCYCLE_CHAT,
   text: `🏪 *Self-collect order · ${lcLabel}* ${orderName}\n\n${summary}` });
 
@@ -325,6 +345,9 @@ const KC_CHAT = '__KC_CHAT__';
 const KC_USERNAME = '__KC_USERNAME__';
 const KC_DM = __KC_DM__;
 const YASH_DM = __YASH_DM__;
+const SHANNA_CHAT = '__SHANNA_CHAT__';
+const SHANNA_USERNAME = '__SHANNA_USERNAME__';
+const SHANNA_DM = __SHANNA_DM__;
 const LAUNCHCYCLE_CHAT = '__LC_CHAT__';
 
 // Mirror the paid path exactly: whoever was told to pack it gets told to stop.
@@ -345,6 +368,14 @@ if (point === 'cck') {
     jobs.push({ chat_id: KC_DM,
       text: `❌ *CANCELLED - DO NOT PACK* ${orderName}\n\n${summary}` });
   }
+} else if (point === 'bukit') {
+  const tag = SHANNA_USERNAME ? `@${SHANNA_USERNAME}` : 'Shanna';
+  jobs.push({ chat_id: SHANNA_CHAT,
+    text: `❌ *CANCELLED - do not pack · Bukit Panjang* ${orderName}\n\n${summary}\n\n${tag} this one is off, no need to queue it.` });
+  if (SHANNA_DM) {
+    jobs.push({ chat_id: SHANNA_DM,
+      text: `❌ *CANCELLED - DO NOT PACK* ${orderName}\n\n${summary}` });
+  }
 } else {
   if (YASH_DM) {
     jobs.push({ chat_id: YASH_DM,
@@ -352,7 +383,7 @@ if (point === 'cck') {
   }
 }
 
-const lcLabel = point === 'cck' ? 'CCK' : point === 'stevens' ? 'Stevens' : 'Siglap';
+const lcLabel = point === 'cck' ? 'CCK' : point === 'stevens' ? 'Stevens' : point === 'bukit' ? 'Bukit Panjang' : 'Siglap';
 jobs.push({ chat_id: LAUNCHCYCLE_CHAT,
   text: `❌ *Self-collect order cancelled · ${lcLabel}* ${orderName}\n\n${summary}` });
 
@@ -374,6 +405,9 @@ def fill(js):
         .replace("__KC_DM__", str(KC_DM_ID) if KC_DM_ID else "null")
         .replace("__YASH_USERNAME__", YASH_USERNAME)
         .replace("__YASH_DM__", str(YASH_DM_ID) if YASH_DM_ID else "null")
+        .replace("__SHANNA_CHAT__", SHANNA_CHAT_ID)
+        .replace("__SHANNA_USERNAME__", SHANNA_USERNAME)
+        .replace("__SHANNA_DM__", str(SHANNA_DM_ID) if SHANNA_DM_ID else "null")
         .replace("__LC_CHAT__", LAUNCHCYCLE_CHAT_ID))
 
 
