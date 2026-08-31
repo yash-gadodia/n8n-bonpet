@@ -67,7 +67,7 @@ KC_DM_ID = 8936228589                        # Kc Ong's private chat with @wesle
 # Bukit Panjang (Shanna / Pending Road)
 SHANNA_CHAT_ID = "-5319907131"               # "shanna X the bon pet self collection" group
 SHANNA_USERNAME = "rainbowprickles"          # @-tag in her group
-SHANNA_DM_ID = None                          # set once Shanna sends /start to @weslee_bot
+SHANNA_DM_ID = 87502899                      # Shanna's private chat with @weslee_bot
 
 # Launch Cycle (external advisory agency) - visibility copy of every self-collect order
 LAUNCHCYCLE_CHAT_ID = "-5177312185"          # "Launch Cycle X The Bon Pet" group
